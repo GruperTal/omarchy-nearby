@@ -717,6 +717,77 @@ async fn start_active_discovery(
     }
 }
 
+const MAX_TRANSFER_DEPTH: usize = 32;
+const MAX_TRANSFER_FILES: usize = 10_000;
+
+fn collect_directory_files(
+    current: &Path,
+    prefix: &str,
+    depth: usize,
+    sources: &mut HashMap<String, PathBuf>,
+    metadata: &mut HashMap<FileId, FileMetadata>,
+) -> Result<()> {
+    if depth > MAX_TRANSFER_DEPTH {
+        return Err(anyhow!("Folder depth exceeds limit of 32 levels"));
+    }
+    if metadata.len() >= MAX_TRANSFER_FILES {
+        return Err(anyhow!("Transfer exceeds maximum limit of 10,000 files"));
+    }
+    let entries = match std::fs::read_dir(current) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+    for entry_res in entries {
+        let entry = match entry_res {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let file_type = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+        // Skip symlinks to prevent loops and escaping the directory tree
+        if file_type.is_symlink() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let file_name_str = file_name.to_string_lossy();
+        let relative_name = if prefix.is_empty() {
+            file_name_str.to_string()
+        } else {
+            format!("{prefix}/{file_name_str}")
+        };
+
+        if file_type.is_dir() {
+            collect_directory_files(&entry.path(), &relative_name, depth + 1, sources, metadata)?;
+        } else if file_type.is_file() {
+            if metadata.len() >= MAX_TRANSFER_FILES {
+                return Err(anyhow!(
+                    "Transfer exceeds maximum file limit (10,000 files)"
+                ));
+            }
+            let path = entry.path();
+            let file_meta = match std::fs::metadata(&path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let id = FileId::new();
+            let meta = FileMetadata {
+                id: id.clone(),
+                file_name: relative_name,
+                size: file_meta.len(),
+                file_type: localsend_rs::core::file::get_mime_type(&path),
+                sha256: None,
+                preview: None,
+                metadata: None,
+            };
+            sources.insert(id.as_str().to_string(), path);
+            metadata.insert(id, meta);
+        }
+    }
+    Ok(())
+}
+
 // Identity, target, payload, authorization and cancellation are independent
 // parts of one transfer operation; grouping them would only move this contract
 // into a single-use parameter struct.
@@ -778,12 +849,52 @@ async fn send_payload(
         }
         for raw in paths {
             let path = PathBuf::from(raw);
-            if !path.is_file() {
+            let sym_meta = match std::fs::symlink_metadata(&path) {
+                Ok(m) => m,
+                Err(_) => return Err(anyhow!("file is unavailable")),
+            };
+            if sym_meta.file_type().is_symlink() {
+                let real_path =
+                    std::fs::canonicalize(&path).map_err(|_| anyhow!("file is unavailable"))?;
+                let real_meta =
+                    std::fs::metadata(&real_path).map_err(|_| anyhow!("file is unavailable"))?;
+                if real_meta.is_dir() {
+                    let folder_name = path
+                        .file_name()
+                        .unwrap_or_else(|| real_path.file_name().unwrap_or_default())
+                        .to_string_lossy()
+                        .to_string();
+                    collect_directory_files(
+                        &real_path,
+                        &folder_name,
+                        1,
+                        &mut sources,
+                        &mut metadata,
+                    )?;
+                } else if real_meta.is_file() {
+                    let meta = build_file_metadata(&real_path).await?;
+                    sources.insert(meta.id.as_str().to_string(), real_path);
+                    metadata.insert(meta.id.clone(), meta);
+                } else {
+                    return Err(anyhow!("file is unavailable"));
+                }
+            } else if sym_meta.is_dir() {
+                let folder_name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                collect_directory_files(&path, &folder_name, 1, &mut sources, &mut metadata)?;
+            } else if sym_meta.is_file() {
+                let meta = build_file_metadata(&path).await?;
+                sources.insert(meta.id.as_str().to_string(), path);
+                metadata.insert(meta.id.clone(), meta);
+            } else {
                 return Err(anyhow!("file is unavailable"));
             }
-            let meta = build_file_metadata(&path).await?;
-            sources.insert(meta.id.as_str().to_string(), path);
-            metadata.insert(meta.id.clone(), meta);
+        }
+        if metadata.is_empty() {
+            return Err(anyhow!("no files selected"));
         }
     }
     let total: u64 = metadata.values().map(|f| f.size).sum();
@@ -1538,6 +1649,64 @@ mod tests {
         assert!(!is_nearby_partial_name("nearby-session-file.part"));
         assert!(!is_nearby_partial_name(".nearby-session-file.txt"));
         assert!(!is_nearby_partial_name("notes.part"));
+    }
+
+    #[test]
+    fn collect_directory_files_recursively_gathers_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "omarchy-nearby-collect-test-{}",
+            FileId::new().as_str()
+        ));
+        let sub = dir.join("sub");
+        let deep = sub.join("deep");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(dir.join("root.txt"), b"root").unwrap();
+        std::fs::write(sub.join("sub.txt"), b"sub").unwrap();
+        std::fs::write(deep.join("deep.txt"), b"deep").unwrap();
+
+        let mut sources = HashMap::new();
+        let mut metadata = HashMap::new();
+        collect_directory_files(&dir, "my_folder", 1, &mut sources, &mut metadata).unwrap();
+
+        assert_eq!(metadata.len(), 3);
+        assert_eq!(sources.len(), 3);
+        let names: Vec<String> = metadata.values().map(|m| m.file_name.clone()).collect();
+        assert!(names.contains(&"my_folder/root.txt".to_string()));
+        assert!(names.contains(&"my_folder/sub/sub.txt".to_string()));
+        assert!(names.contains(&"my_folder/sub/deep/deep.txt".to_string()));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collect_directory_files_skips_symlinks() {
+        let dir = std::env::temp_dir().join(format!(
+            "omarchy-nearby-symlink-test-{}",
+            FileId::new().as_str()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("real.txt"), b"real").unwrap();
+
+        let outside =
+            std::env::temp_dir().join(format!("omarchy-nearby-outside-{}", FileId::new().as_str()));
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), b"secret").unwrap();
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, dir.join("link_dir")).unwrap();
+
+        let mut sources = HashMap::new();
+        let mut metadata = HashMap::new();
+        collect_directory_files(&dir, "folder", 1, &mut sources, &mut metadata).unwrap();
+
+        assert_eq!(metadata.len(), 1);
+        assert_eq!(
+            metadata.values().next().unwrap().file_name,
+            "folder/real.txt"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 
     #[tokio::test]

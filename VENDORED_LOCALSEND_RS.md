@@ -470,6 +470,23 @@ body keeps busy before delivering the accepted chunk, so that chunk's write is
 queued. Against the previous writer it failed on every run with an empty file;
 it now finds the accepted bytes. Upstream status: not submitted.
 
+### 16. Support nested relative paths for folder transfers with symlink protection
+
+- Files: `src/path_safety.rs`, `src/core/file.rs`
+- Regression tests: `allows_safe_nested_relative_paths`, `rejects_symlink_in_nested_path`, `commit_temp_file_preserves_nested_directory_structure_on_collision`
+
+The imported tree required `normal_components == 1` in `safe_join`, rejecting
+any file whose remote name contained relative directory components. The
+LocalSend v2 protocol transmits folder hierarchies by setting `fileName` to a
+slash-separated relative path (`folder/sub/file.ext`).
+
+This patch allows multi-component relative paths that remain strictly inside
+the destination directory, rejects existing symlinks along the nested path to
+prevent parent-directory traversal escapes, and updates `commit_temp_file` so
+numeric collision suffixes (`file (1).ext`) preserve parent directory structure
+instead of flattening into the root save directory.
+
+
 ## Nearby behavior outside the vendor
 
 The LocalSend 1.18 client-certificate compatibility hotfix is not one of the
