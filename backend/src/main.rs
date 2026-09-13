@@ -939,7 +939,7 @@ async fn send_payload(
     }
     let mut completed = 0u64;
     let mut file_entries: Vec<_> = prepared.files.iter().collect();
-    file_entries.sort_by_key(|(id, _)| file_names.get(*id).map(|s| s.as_str()).unwrap_or_default());
+    file_entries.sort_by_key(|(id, _)| file_names.get(id).map(|s| s.as_str()).unwrap_or_default());
     for (file_id, token) in file_entries {
         let path = sources.get(file_id.as_str()).cloned();
         let file_name = file_names.get(file_id).cloned().unwrap_or_default();
@@ -962,6 +962,8 @@ async fn send_payload(
         let alias = target.alias.clone();
         let id = transfer_id.clone();
         let current_name = file_name.clone();
+        // Emit an immediate event when starting each file so the UI updates
+        // the active file name without waiting for the progress throttle window.
         emit(
             json!({"event":"outgoing_progress","transferId":id,"name":current_name,"bytes":base,"total":total,"target":alias}),
         );
