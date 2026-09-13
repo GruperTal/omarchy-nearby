@@ -864,13 +864,16 @@ async fn send_payload(
                         .unwrap_or_else(|| real_path.file_name().unwrap_or_default())
                         .to_string_lossy()
                         .to_string();
-                    collect_directory_files(
-                        &real_path,
-                        &folder_name,
-                        1,
-                        &mut sources,
-                        &mut metadata,
-                    )?;
+                    let mut s = sources;
+                    let mut m = metadata;
+                    (s, m) = tokio::task::spawn_blocking(move || {
+                        collect_directory_files(&real_path, &folder_name, 1, &mut s, &mut m)?;
+                        Ok::<_, anyhow::Error>((s, m))
+                    })
+                    .await
+                    .map_err(|e| anyhow!("directory scan failed: {e}"))??;
+                    sources = s;
+                    metadata = m;
                 } else if real_meta.is_file() {
                     let meta = build_file_metadata(&real_path).await?;
                     sources.insert(meta.id.as_str().to_string(), real_path);
@@ -884,7 +887,16 @@ async fn send_payload(
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string();
-                collect_directory_files(&path, &folder_name, 1, &mut sources, &mut metadata)?;
+                let mut s = sources;
+                let mut m = metadata;
+                (s, m) = tokio::task::spawn_blocking(move || {
+                    collect_directory_files(&path, &folder_name, 1, &mut s, &mut m)?;
+                    Ok::<_, anyhow::Error>((s, m))
+                })
+                .await
+                .map_err(|e| anyhow!("directory scan failed: {e}"))??;
+                sources = s;
+                metadata = m;
             } else if sym_meta.is_file() {
                 let meta = build_file_metadata(&path).await?;
                 sources.insert(meta.id.as_str().to_string(), path);
@@ -903,6 +915,10 @@ async fn send_payload(
         .next()
         .map(|f| f.file_name.clone())
         .unwrap_or_default();
+    let file_names: HashMap<FileId, String> = metadata
+        .iter()
+        .map(|(id, f)| (id.clone(), f.file_name.clone()))
+        .collect();
     emit(
         json!({"event":"outgoing_preparing","transferId":transfer_id,"name":summary,"count":metadata.len(),"total":total,"target":valid_remote_text(&target.alias,128)}),
     );
@@ -922,8 +938,11 @@ async fn send_payload(
         return Ok(SendPayloadOutcome::Finished);
     }
     let mut completed = 0u64;
-    for (file_id, token) in &prepared.files {
+    let mut file_entries: Vec<_> = prepared.files.iter().collect();
+    file_entries.sort_by_key(|(id, _)| file_names.get(*id).map(|s| s.as_str()).unwrap_or_default());
+    for (file_id, token) in file_entries {
         let path = sources.get(file_id.as_str()).cloned();
+        let file_name = file_names.get(file_id).cloned().unwrap_or_default();
         let text_bytes = if path.is_some() {
             None
         } else {
@@ -942,8 +961,13 @@ async fn send_payload(
         let base = completed;
         let alias = target.alias.clone();
         let id = transfer_id.clone();
-        let last_emit = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1)));
+        let current_name = file_name.clone();
+        emit(
+            json!({"event":"outgoing_progress","transferId":id,"name":current_name,"bytes":base,"total":total,"target":alias}),
+        );
+        let last_emit = Arc::new(Mutex::new(Instant::now()));
         let progress_clock = last_emit.clone();
+        let progress_name = current_name.clone();
         let progress = Some(Box::new(move |sent, _, _| {
             let mut last = progress_clock.lock().unwrap();
             if base + sent < total && last.elapsed() < Duration::from_millis(75) {
@@ -951,7 +975,7 @@ async fn send_payload(
             }
             *last = Instant::now();
             emit(
-                json!({"event":"outgoing_progress","transferId":id,"bytes":base+sent,"total":total,"target":alias}),
+                json!({"event":"outgoing_progress","transferId":id,"name":progress_name,"bytes":base+sent,"total":total,"target":alias}),
             );
         }) as ProgressCallback);
         let upload: Pin<Box<dyn Future<Output = localsend_rs::error::Result<()>> + Send + '_>> =
