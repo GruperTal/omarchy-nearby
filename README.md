@@ -2,7 +2,7 @@
 
 Native nearby sharing for Omarchy Quattro, compatible with the LocalSend protocol.
 
-Open Nearby from the bar, choose a device, and send files or clipboard text.
+Open Nearby from the bar, choose a device, and send files, folders or clipboard text.
 Receive transfers with explicit approval, follow their progress, and optionally
 protect incoming requests with a PIN. Nearby runs its own Rust helper; the
 LocalSend application is not required on your Omarchy computer.
@@ -15,7 +15,7 @@ LocalSend application is not required on your Omarchy computer.
 
 ![Nearby discovering compatible devices on the local network](assets/screenshots/nearby-discovery.png)
 
-### Send files or clipboard text
+### Send files, folders or clipboard text
 
 ![Nearby actions for sending files or clipboard text to a selected device](assets/screenshots/nearby-send-actions.png)
 
@@ -62,7 +62,7 @@ While the receiver is off, normal startup does not download the helper.
 1. Put both devices on the same local network and open the receiving app on the
    other device.
 2. Open Nearby from the bar and turn its receiver on if it is off.
-3. Select the device, then choose **Send files** or **Send clipboard**.
+3. Select the device, then choose **Send files**, **Send folder** or **Send clipboard**.
 4. Enter the destination's PIN if requested, and approve the transfer there.
 
 For incoming transfers, leave Nearby on and use **Accept** or **Decline** when a
