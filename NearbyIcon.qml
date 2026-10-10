@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Shapes
 import qs.Commons
+import qs.Commons as Commons
 
 // The Nearby logo, drawn as a vector so it stays sharp at bar and hero sizes
 // and takes the theme colour like the glyphs around it. The path is the one in
@@ -9,7 +10,7 @@ Item {
   id: root
 
   property real iconSize: Style.font.icon
-  property color color: Color.foreground
+  property color color: Commons.Color.foreground
 
   width: iconSize
   height: iconSize

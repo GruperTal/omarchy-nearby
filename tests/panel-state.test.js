@@ -600,4 +600,21 @@ function callNames(state) {
   }
 }
 
+{
+  // Since Qt 6.12 QtQuick exports its own Color singleton, which shadows the
+  // palette imported from qs.Commons: an unqualified Color.foreground reads
+  // undefined. Palette references must go through the qs.Commons alias.
+  const unqualified = (qml) => [...qml.matchAll(/(^|[^.\w])Color\.\w+/gm)]
+    .map((m) => qml.slice(0, m.index).split("\n").length)
+  assert.deepEqual(unqualified("a: Color.foreground\nb: Commons.Color.urgent\nc: Qt.color"), [1],
+    "the palette scanner must only flag unqualified Color references")
+
+  for (const file of fs.readdirSync(require("node:path").join(__dirname, "..")).filter((f) => f.endsWith(".qml"))) {
+    const qml = fs.readFileSync(require.resolve(`../${file}`), "utf8")
+    for (const line of unqualified(qml)) {
+      assert.fail(`${file}:${line}: use Commons.Color; QtQuick's Color singleton shadows the palette since Qt 6.12`)
+    }
+  }
+}
+
 console.log("panel state tests passed")

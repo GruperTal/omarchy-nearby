@@ -4,6 +4,9 @@
 
 - Show the Nearby logo in the bar and in the panel header instead of a generic
   icon glyph.
+- Qualify the palette as `Commons.Color` so it is not shadowed by the
+  `Color` singleton that QtQuick exports since Qt 6.12, which left the
+  panel's fallback colours and the logo's default colour undefined.
 
 ## 1.2.4
 
