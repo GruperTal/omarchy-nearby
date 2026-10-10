@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.5-dev
+
+- Show the Nearby logo in the bar and in the panel header instead of a generic
+  icon glyph.
+
 ## 1.2.4
 
 - Render every panel text as plain text, so a peer alias containing markup
