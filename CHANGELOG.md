@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.6-dev
+
+- Accept transfers from devices you trust without asking. **Auto-accept** in a
+  device's entry trusts it by the TLS certificate it proves when it connects;
+  a device that only repeats a trusted fingerprint is still asked about. The
+  receiver now requests, without requiring, a client certificate from senders.
+
 ## 1.2.5
 
 - Show the Nearby logo in the bar and in the panel header instead of a generic

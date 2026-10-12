@@ -305,6 +305,23 @@ The downloaded executable independently matched the release checksum and
 source digest and tag on a GitHub-hosted runner, and `--version` reported
 `omarchy-nearby-helper 1.2.4`. Android interoperability remains **Not run**.
 
+### Trusted device auto-accept development validation, 2026-10-12
+
+The development checkout advances to plugin `1.2.6-dev` and helper/floor
+`1.2.5`. `helper-release.env` still pins the verified 1.2.4 artifact; it must
+only change after publishing and independently verifying a matching 1.2.5
+helper. Until then this checkout requires a deliberately built local helper to
+meet its new compatibility floor.
+
+The helper, vendor and Node suites passed. They cover a sender identified by
+the certificate it proves, a sender repeating a trusted fingerprint with
+another certificate or with none, plain HTTP, a certificate presented without
+its key, trust list validation and persistence before use, and the shell's
+handling of a transfer accepted without asking. All of that is Nearby talking
+to its own vendored client. Whether a given official LocalSend release presents
+the certificate behind its announced fingerprint has not been checked:
+scenario 22 is **Not run**.
+
 ## Manual interoperability matrix
 
 Run applicable transfer and PIN scenarios with both Android and iOS LocalSend
@@ -385,6 +402,16 @@ complete until those versions and results are written down.
     valid file while preserving its incoming PIN; enable Nearby again and
     confirm that the PIN still applies. Never replace personal settings with
     a FIFO or delete them as a generic recovery step.
+22. With official LocalSend on Android and on iOS, select the phone in Nearby
+    and turn Auto-accept on. Send a file and then text from the phone: neither
+    may prompt, the file must be saved and announced once, and the helper log
+    must not show a request waiting for approval. Record the app versions. If a
+    version still prompts, record that it presents no usable client
+    certificate. Turn Auto-accept off and confirm the prompt returns. From a
+    second device, announce the phone's fingerprint and send: Nearby must
+    prompt. Enable an incoming PIN and confirm the trusted phone still has to
+    supply it. Run `omarchy-shell oma.nearby forgetTrusted` and confirm the
+    phone is asked about again.
 
 ## Result record
 
@@ -411,6 +438,7 @@ Copy this template for each validation session. Leave unexecuted cases marked
 | 17: multiple monitors | Omarchy | Not run | |
 | 20: desktop integration | Omarchy + peer | Not run | |
 | 21: unsafe settings and recovery | Isolated Omarchy installation | Not run | |
+| 22: trusted device auto-accept | Android / iOS, separate rows when run | Not run | |
 
 For failures, identify the exact scenario and attach redacted logs or a
 reproduction. Split grouped rows whenever individual outcomes differ.
