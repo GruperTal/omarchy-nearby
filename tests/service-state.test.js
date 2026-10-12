@@ -147,6 +147,7 @@ const functionNames = [
   "startDiscovery", "forceFullDiscovery", "stopDiscovery", "chooseDevice", "clearTarget",
   "openIncomingPinSettings", "beginIncomingPinEdit", "requestDisableIncomingPin",
   "cancelIncomingPinSettings", "submitIncomingPin", "confirmDisableIncomingPin",
+  "toggleSelectedDeviceTrusted", "forgetTrustedDevices",
   "failWith", "cancelOutgoing", "noteTextCopied",
   "clearPendingOutgoing", "dispatchPendingOutgoing", "beginOutgoing", "retryWithPin",
   "showPinPrompt", "cancelPin", "acceptIncoming", "declineIncoming",
@@ -219,11 +220,14 @@ function engine(initial = {}) {
     incomingPinUpdating: false,
     pendingIncomingPinEnabled: null,
     incomingPinError: "",
+    trustedDevices: [],
+    autoAccepted: null,
     transferSequence: 0,
     maxOutgoingTextBytes: 1024 * 1024,
     ...initial,
   }
   Object.defineProperty(context, "incoming", {get() { return Model.currentIncoming(context.incomingQueue) }})
+  Object.defineProperty(context, "selectedDeviceTrusted", {get() { return Model.isTrusted(context.trustedDevices, context.selectedDevice) }})
   Object.defineProperty(context, "requiredHelperVersion", {
     enumerable: true,
     get() { return requiredHelperVersion(context) },
@@ -864,6 +868,110 @@ for (const busy of ["sending", "receiving", "pin"]) {
   state.handleEvent({event: "outgoing_done", transferId: retryId})
   assert.equal(state.viewState, "text", "deferred incoming text must become accessible after outgoing completion")
   assert.equal(state.incomingText, "hello")
+}
+
+// The helper owns the trust list and makes the decision; the engine mirrors
+// the list and asks for changes by fingerprint.
+{
+  const fingerprint = "ab".repeat(32)
+  const phone = {fingerprint, alias: "Phone", protocol: "https"}
+  const state = engine({selectedDevice: phone})
+  state.toggleSelectedDeviceTrusted()
+  assert.deepEqual(state.sent, [{command: "trust_device", fingerprint, alias: "Phone"}])
+  assert.equal(state.selectedDeviceTrusted, false, "a device is trusted when the helper says so, not when asked")
+  state.handleEvent({event: "trusted_devices", devices: [{fingerprint: fingerprint.toUpperCase(), alias: "Phone"}]})
+  assert.equal(state.selectedDeviceTrusted, true)
+  state.toggleSelectedDeviceTrusted()
+  assert.deepEqual(state.sent.at(-1), {command: "untrust_device", fingerprint})
+  state.handleEvent({event: "trusted_devices", devices: []})
+  assert.equal(state.selectedDeviceTrusted, false)
+
+  const plain = engine({selectedDevice: {fingerprint: "random-id", alias: "Old phone", protocol: "http"}})
+  plain.toggleSelectedDeviceTrusted()
+  assert.equal(plain.sent.length, 0, "a device without a certificate cannot be trusted")
+  const notReady = engine({selectedDevice: phone, backendReady: false})
+  notReady.toggleSelectedDeviceTrusted()
+  assert.equal(notReady.sent.length, 0)
+
+  const forgetting = engine({trustedDevices: [{fingerprint, alias: "Phone"}, {fingerprint: "cd".repeat(32), alias: "Tablet"}]})
+  forgetting.forgetTrustedDevices()
+  assert.deepEqual(forgetting.sent, [
+    {command: "untrust_device", fingerprint},
+    {command: "untrust_device", fingerprint: "cd".repeat(32)},
+  ], "forgetting must reach devices that are not nearby to be selected")
+}
+assert.match(source, /function forgetTrusted\(\): string \{ root\.forgetTrustedDevices\(\); return "ok" \}/,
+  "trust must be revocable from the shell for a device that is no longer nearby")
+
+// A transfer the helper accepted on its own is followed like one the user
+// accepted, and is announced when it has arrived, since no prompt was shown.
+function autoAccepted(sender = "Phone") {
+  return {event: "incoming_auto_accepted", requestId: "auto", sender, files: [{name: "photo.jpg", size: 4}], total: 4}
+}
+{
+  // Panel closed: nothing at the start, one notification at the end.
+  const state = engine({viewState: "nearby", openViewCount: 0, anyViewOpen: false})
+  state.handleEvent(autoAccepted("<b>Phone</b>"))
+  assert.equal(state.viewState, "receiving")
+  assert.equal(state.transferPeer, "<b>Phone</b>")
+  assert.equal(state.transferName, "photo.jpg")
+  assert.deepEqual(notificationTitles(state), [], "an accepted transfer needs no answer, so it must not interrupt")
+  state.handleEvent({event: "incoming_progress", sessionId: "s", name: "photo.jpg", sender: "Phone", bytes: 4, total: 4})
+  state.handleEvent({event: "incoming_done", sessionId: "s"})
+  assert.equal(state.viewState, "success")
+  assert.deepEqual(notificationCommands(state), [[
+    "omarchy-notification-send", "--app-name", "Nearby", "--urgency", "normal",
+    "Transfer received", "From &lt;b&gt;Phone&lt;/b&gt;: photo.jpg",
+  ]], "the arrival must be announced once, with remote text escaped after fixed text")
+  state.handleEvent({event: "incoming_done", sessionId: "s"})
+  assert.equal(state.notified.length, 1, "a repeated completion must not announce again")
+}
+{
+  // Panel open and following the transfer: the result is on screen already.
+  const state = engine({viewState: "nearby"})
+  state.handleEvent(autoAccepted())
+  state.handleEvent({event: "incoming_progress", sessionId: "s", name: "photo.jpg", sender: "Phone", bytes: 4, total: 4})
+  state.handleEvent({event: "incoming_done", sessionId: "s"})
+  assert.equal(state.viewState, "success")
+  assert.deepEqual(notificationTitles(state), [])
+}
+{
+  // Another transfer holds the view: the file still arrives, unseen, so the
+  // notification is the only sign of it.
+  const state = engine()
+  state.beginOutgoing({kind: "text", device: state.selectedDevice, text: "outgoing"})
+  state.handleEvent({event: "outgoing_preparing", transferId: state.outgoingTransferId, name: "message.txt", target: "Phone"})
+  state.handleEvent(autoAccepted())
+  assert.equal(state.viewState, "sending", "an accepted transfer must not take the view from an outgoing one")
+  state.handleEvent({event: "incoming_progress", sessionId: "s", name: "photo.jpg", sender: "Phone", bytes: 4, total: 4})
+  state.handleEvent({event: "incoming_done", sessionId: "s"})
+  assert.equal(state.viewState, "sending")
+  assert.deepEqual(notificationTitles(state), ["Transfer received"])
+}
+{
+  // A failed or cancelled transfer left nothing to announce, and must not
+  // leave its sender attached to a later, unrelated completion.
+  for (const ending of ["incoming_cancelled", "incoming_failed"]) {
+    const state = engine({viewState: "nearby", openViewCount: 0, anyViewOpen: false})
+    state.handleEvent(autoAccepted())
+    state.handleEvent({event: ending, sessionId: "s", message: "failed"})
+    assert.equal(state.autoAccepted, null)
+    assert.deepEqual(notificationTitles(state), [], `${ending} must not be announced as received`)
+  }
+  // Text raises its own notification.
+  const text = engine({viewState: "nearby", openViewCount: 0, anyViewOpen: false})
+  text.handleEvent(autoAccepted())
+  text.handleEvent({event: "incoming_text", sessionId: "s", sender: "Phone", text: "hello"})
+  text.handleEvent({event: "incoming_done", sessionId: "s"})
+  assert.equal(text.viewState, "text")
+  assert.deepEqual(notificationTitles(text), ["Text received"])
+  // A helper that stops forgets the transfer it had accepted.
+  const stopped = engine({viewState: "nearby"})
+  stopped.root = stopped
+  stopped.handleEvent(autoAccepted())
+  stopped.backend.running = false
+  stopped.handleBackendExit(1)
+  assert.equal(stopped.autoAccepted, null)
 }
 
 {

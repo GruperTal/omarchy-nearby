@@ -147,20 +147,9 @@ impl LocalSendServer {
                     (cert.cert_pem, cert.key_pem)
                 };
 
-                let tls_config =
-                    RustlsConfig::from_pem(cert_pem.into_bytes(), key_pem.into_bytes())
-                        .await
-                        .map_err(|e| {
-                            crate::error::LocalSendError::network(format!(
-                                "TLS config error: {}",
-                                e
-                            ))
-                        })?;
-                // The receiver serves HTTP/1.1 only (see `serve_http1`), so it
-                // must not offer HTTP/2 during the TLS handshake.
-                let mut server_config = (*tls_config.get_inner()).clone();
-                server_config.alpn_protocols = vec![b"http/1.1".to_vec()];
-                tls_config.reload_from_config(Arc::new(server_config));
+                let tls_config = RustlsConfig::from_config(Arc::new(
+                    super::client_identity::server_config(&cert_pem, &key_pem)?,
+                ));
 
                 // Bind before spawn so the real (possibly OS-assigned) port is
                 // known before the ServerState/router are built.
@@ -191,7 +180,11 @@ impl LocalSendServer {
                             e
                         ))
                     })?
-                    .map(|tls| tls.acceptor(connection_limit));
+                    .map(|tls| {
+                        super::client_identity::ClientIdentityAcceptor::new(
+                            tls.acceptor(connection_limit),
+                        )
+                    });
                 let server = serve_http1(server, &self.limits)
                     .serve(router.into_make_service_with_connect_info::<std::net::SocketAddr>());
 

@@ -86,6 +86,13 @@ Item {
   property bool incomingPinUpdating: false
   property var pendingIncomingPinEnabled: null
   property string incomingPinError: ""
+  // Devices whose transfers are accepted without asking. The helper owns the
+  // list and makes the decision, from the certificate a sender proves in the
+  // TLS handshake; this is its mirror for the panel.
+  property var trustedDevices: []
+  readonly property bool selectedDeviceTrusted: Model.isTrusted(trustedDevices, selectedDevice)
+  // The transfer the helper accepted on its own and has not finished yet.
+  property var autoAccepted: null
   property int transferSequence: 0
   property bool shutdownPending: false
   property bool backendAcceptedThisRun: false
@@ -188,6 +195,9 @@ Item {
     function receiverOn(): string { if (!root.receiverEnabled) root.toggleReceiver(); return "ok" }
     function receiverOff(): string { if (root.receiverEnabled) root.toggleReceiver(); return "ok" }
     function receiverToggle(): string { root.toggleReceiver(); return "ok" }
+    // Trust is otherwise withdrawn from the device's own entry, which is only
+    // there while the device is nearby. This reaches one that is not.
+    function forgetTrusted(): string { root.forgetTrustedDevices(); return "ok" }
     // The same repair the panel button runs, for a shell whose bar is not
     // where the user is looking when the helper stops matching.
     function retryHelper(): string { if (root.helperUpdating) return "busy"; root.startHelperUpdate(); return "ok" }
@@ -323,6 +333,14 @@ Item {
     incomingPinUpdating=true; pendingIncomingPinEnabled=false; incomingPinError=""
     send({command:"disable_incoming_pin"})
   }
+  function toggleSelectedDeviceTrusted() {
+    if (!backendReady || !Model.canTrust(selectedDevice)) return
+    if (selectedDeviceTrusted) send({command:"untrust_device",fingerprint:selectedDevice.fingerprint})
+    else send({command:"trust_device",fingerprint:selectedDevice.fingerprint,alias:selectedDevice.alias})
+  }
+  function forgetTrustedDevices() {
+    for (var index=0; index<trustedDevices.length; index++) send({command:"untrust_device",fingerprint:trustedDevices[index].fingerprint})
+  }
   // Source updates and helper releases are independent. The repair command asks the
   // launcher to prefetch the immutable helper selected by this checkout.
   function startHelperUpdate() {
@@ -452,6 +470,7 @@ Item {
   function finishTerminal() { viewState="nearby"; cursorRequested(0); startDiscovery() }
   function handleBackendExit(code) {
     backendReady=false; discoveryActive=false; incomingQueue=[]; incomingTextPending=false; activeIncomingSession=""; incomingPinUpdating=false; pendingIncomingPinEnabled=null; incomingPinError=""; incomingPinCleared(); clearPendingOutgoing()
+    autoAccepted=null
     if (shutdownPending) { finishReceiverShutdown(); return }
     if (!receiverEnabled) { statusText="Turned off"; errorText=""; return }
     if (backendVersionMismatch) return
@@ -483,6 +502,15 @@ Item {
   function handleEvent(event) {
     if (!event || !event.event) return
     if (backendVersionMismatch && event.event !== "ready") return
+    // A transfer accepted without asking never showed a prompt, so its arrival
+    // is announced when it completes, unless the open panel was following it.
+    // Received text raises its own notification.
+    if (autoAccepted && (event.event==="incoming_done"||event.event==="incoming_cancelled"||event.event==="incoming_failed"||event.event==="incoming_text")) {
+      var arrived=autoAccepted
+      autoAccepted=null
+      if (event.event==="incoming_done" && notificationNeeded(activeIncomingSession===String(event.sessionId) && !pendingOutgoing))
+        Quickshell.execDetached(["omarchy-notification-send","--app-name","Nearby","--urgency","normal","Transfer received","From "+Model.notificationText(arrived.sender)+": "+Model.notificationText(arrived.summary)])
+    }
     if (event.event === "startup_failed") {
       backendStartupFailureCode=String(event.code || "")
       backendStartupFailurePort=Number(event.port) || 0
@@ -517,6 +545,14 @@ Item {
       if (incomingTakesView) { viewState="incoming"; cursorRequested(1) }
       if (notificationNeeded(incomingTakesView && incoming && incoming.requestId===event.requestId))
         Quickshell.execDetached(["omarchy-notification-send","--app-name","Nearby","--urgency","normal","Incoming transfer","From "+Model.notificationText(event.sender)+": "+Model.notificationText(Model.incomingSummary(event.files))])
+    }
+    else if (event.event === "trusted_devices") trustedDevices=Model.trustedDevices(event.devices)
+    else if (event.event === "incoming_auto_accepted") {
+      // The helper has already answered. The view follows the transfer the
+      // way it would after Accept, unless another transfer holds it.
+      if(viewState.indexOf("incoming_pin_")===0){incomingPinError="";incomingPinCleared()}
+      autoAccepted={sender:String(event.sender || ""),summary:Model.incomingSummary(event.files)}
+      if (viewState!=="sending" && viewState!=="receiving" && viewState!=="pin") { viewState="receiving"; transferPeer=autoAccepted.sender; transferName=autoAccepted.summary; progress=0 }
     }
     else if (event.event === "incoming_text") {
       if(viewState.indexOf("incoming_pin_")===0){incomingPinError="";incomingPinCleared()}

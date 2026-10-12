@@ -203,4 +203,26 @@ assert.deepEqual(Model.barEntry({version:1, plugins:[{id:"oma.nearby",receiverEn
 assert.equal(Model.barEntry({version:1, bar:{layout:{right:[null,"other.plugin",42]}}}, "oma.nearby"), null)
 assert.equal(Model.barEntry({version:1, plugins:["oma.nearby"]}, "oma.nearby"), null)
 
+// Trust is keyed by certificate fingerprint and compared in lowercase, the
+// form the helper stores. Only a device with a certificate can be trusted.
+{
+  const fingerprint = "ab".repeat(32)
+  const trusted = Model.trustedDevices([{fingerprint: fingerprint.toUpperCase(), alias: "Phone"}, null, {alias: "no fingerprint"}, {fingerprint: 42}])
+  assert.deepEqual(trusted, [{fingerprint, alias: "Phone"}])
+  assert.deepEqual(Model.trustedDevices(null), [])
+  assert.equal(Model.isTrusted(trusted, {fingerprint}), true)
+  assert.equal(Model.isTrusted(trusted, {fingerprint: fingerprint.toUpperCase()}), true)
+  assert.equal(Model.isTrusted(trusted, {fingerprint: "cd".repeat(32)}), false)
+  assert.equal(Model.isTrusted(trusted, {fingerprint: ""}), false)
+  assert.equal(Model.isTrusted(trusted, null), false)
+  assert.equal(Model.isTrusted([{fingerprint: "", alias: "empty"}], {fingerprint: ""}), false,
+    "a device with no fingerprint must never match an entry")
+
+  assert.equal(Model.canTrust({protocol: "https", fingerprint}), true)
+  assert.equal(Model.canTrust({protocol: "http", fingerprint}), false,
+    "a plain HTTP device presents no certificate to be trusted by")
+  assert.equal(Model.canTrust({protocol: "https", fingerprint: "random-http-style-id"}), false)
+  assert.equal(Model.canTrust(null), false)
+}
+
 console.log("Model tests passed")

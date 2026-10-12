@@ -5,6 +5,7 @@ pub mod limits;
 pub mod server;
 pub mod web_share;
 
+pub(crate) mod client_identity;
 pub(crate) mod handlers;
 pub(crate) mod pin;
 pub(crate) mod routes;

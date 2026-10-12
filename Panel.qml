@@ -38,6 +38,11 @@ Panel {
   readonly property bool discoveryActive: engine ? engine.discoveryActive : false
   readonly property var devices: engine ? engine.devices : []
   readonly property var selectedDevice: engine ? engine.selectedDevice : null
+  // The device's entry offers auto-accept only when the device has a
+  // certificate to be trusted by; Back moves down a row when it does.
+  readonly property bool selectedDeviceTrusted: engine ? engine.selectedDeviceTrusted : false
+  readonly property bool targetCanTrust: Model.canTrust(selectedDevice)
+  readonly property int targetBackIndex: targetCanTrust ? 4 : 3
   readonly property string viewState: engine ? engine.viewState : "nearby"
   readonly property string statusText: engine ? engine.statusText : "Nearby engine is not loaded."
   readonly property string errorText: engine ? engine.errorText : "Nearby engine is not loaded."
@@ -142,6 +147,7 @@ Panel {
   function finishText() { if (engine) engine.finishText() }
   function finishTerminal() { if (engine) engine.finishTerminal() }
   function cancelOutgoing() { if (engine) engine.cancelOutgoing() }
+  function toggleTrusted() { if (engine) engine.toggleSelectedDeviceTrusted() }
   function cancelPin() { if (engine) engine.cancelPin() }
   function retryWithPin() { if (engine) engine.retryWithPin(String(pinInput.text || "")) }
   function openIncomingPinSettings() { if (engine) engine.openIncomingPinSettings() }
@@ -214,7 +220,7 @@ Panel {
       selectedIndex = Math.max(0, Math.min(1, selectedIndex + dx))
       return
     }
-    var count = viewState === "target" ? 4 : ((viewState === "incoming" || viewState === "text" || viewState === "incoming_pin_disable") ? 2 : (viewState === "incoming_pin_settings" ? (incomingPinEnabled ? 3 : 2) : 1))
+    var count = viewState === "target" ? targetBackIndex + 1 : ((viewState === "incoming" || viewState === "text" || viewState === "incoming_pin_disable") ? 2 : (viewState === "incoming_pin_settings" ? (incomingPinEnabled ? 3 : 2) : 1))
     if (count > 0 && dy !== 0) selectedIndex = Math.max(0, Math.min(count - 1, selectedIndex + dy))
   }
   function activateCursor() {
@@ -229,7 +235,7 @@ Panel {
       else if (receiverEnabled && backendReady && selectedIndex === devices.length) forceFullDiscovery()
       else if (receiverEnabled && backendReady && selectedIndex === devices.length+1) openIncomingPinSettings()
     }
-    else if (viewState === "target") selectedIndex === 0 ? selectFiles() : (selectedIndex === 1 ? selectFolder() : (selectedIndex === 2 ? sendClipboard() : goBack()))
+    else if (viewState === "target") selectedIndex === 0 ? selectFiles() : (selectedIndex === 1 ? selectFolder() : (selectedIndex === 2 ? sendClipboard() : (targetCanTrust && selectedIndex === 3 ? toggleTrusted() : goBack())))
     else if (viewState === "incoming") selectedIndex === 0 ? declineIncoming() : acceptIncoming()
     else if (viewState === "text") { if(selectedIndex===0)copyReceivedText(); else finishText() }
     else if (viewState === "incoming_pin_settings") incomingPinEnabled ? (selectedIndex===0?beginIncomingPinEdit():(selectedIndex===1?requestDisableIncomingPin():goBack())) : (selectedIndex===0?beginIncomingPinEdit():goBack())
@@ -453,7 +459,9 @@ Panel {
           Button { width:parent.width; leftAlign:true; iconText:"󰈔"; text:"Send files"; foreground:root.foreground; fontFamily:root.fontFamily; hasCursor:root.cursorActive&&root.selectedIndex===0; onHovered:function(v){root.noteHover(v,0)}; onClicked:root.selectFiles() }
           Button { width:parent.width; leftAlign:true; iconText:"󰉋"; text:"Send folder"; foreground:root.foreground; fontFamily:root.fontFamily; hasCursor:root.cursorActive&&root.selectedIndex===1; onHovered:function(v){root.noteHover(v,1)}; onClicked:root.selectFolder() }
           Button { width:parent.width; leftAlign:true; iconText:"󰅇"; text:"Send clipboard"; foreground:root.foreground; fontFamily:root.fontFamily; hasCursor:root.cursorActive&&root.selectedIndex===2; onHovered:function(v){root.noteHover(v,2)}; onClicked:root.sendClipboard() }
-          Button { width:parent.width; leftAlign:true; bordered:false; iconText:"󰅁"; text:"Back"; foreground:root.dim; fontFamily:root.fontFamily; hasCursor:root.cursorActive&&root.selectedIndex===3; onHovered:function(v){root.noteHover(v,3)}; onClicked:root.goBack() }
+          Button { visible:root.targetCanTrust; width:parent.width; leftAlign:true; iconText:root.selectedDeviceTrusted?"󰕥":"󰒙"; text:"Auto-accept · "+(root.selectedDeviceTrusted?"On":"Off"); tooltipText:root.selectedDeviceTrusted?"Ask before saving files from this device":"Save files from this device without asking"; foreground:root.foreground; fontFamily:root.fontFamily; hasCursor:root.cursorActive&&root.selectedIndex===3; onHovered:function(v){root.noteHover(v,3)}; onClicked:root.toggleTrusted() }
+          Text { visible:root.targetCanTrust&&root.selectedDeviceTrusted; width:parent.width; textFormat:Text.PlainText; text:"Files and text from this device are accepted without asking."; wrapMode:Text.Wrap; color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.body }
+          Button { width:parent.width; leftAlign:true; bordered:false; iconText:"󰅁"; text:"Back"; foreground:root.dim; fontFamily:root.fontFamily; hasCursor:root.cursorActive&&root.selectedIndex===root.targetBackIndex; onHovered:function(v){root.noteHover(v,root.targetBackIndex)}; onClicked:root.goBack() }
         }
 
         Column {
