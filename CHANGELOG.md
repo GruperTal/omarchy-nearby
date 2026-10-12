@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.7-dev
+
+- Choose the folder received files are saved to with **Save to** in the
+  panel. The choice is kept in Nearby's `shell.json` entry and applied by
+  restarting the receiver.
+
 ## 1.2.6
 
 - Require rustls 0.23.45 to reject TLS 1.3 handshake messages crossing
