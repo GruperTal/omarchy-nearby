@@ -45,6 +45,7 @@ Panel {
   readonly property var incoming: engine ? engine.incoming : null
   readonly property string incomingText: engine ? engine.incomingText : ""
   readonly property real progress: engine ? engine.progress : 0
+  readonly property string saveDirectory: engine ? engine.saveDirectory : ""
   readonly property string transferName: engine ? engine.transferName : ""
   readonly property string transferPeer: engine ? engine.transferPeer : ""
   readonly property string pinError: engine ? engine.pinError : ""
@@ -65,11 +66,12 @@ Panel {
   readonly property string repositoryUrl: "https://github.com/jfg96/omarchy-nearby"
   readonly property string updateCommand: "omarchy plugin update oma.nearby"
 
-  // The update row sits after the devices and compact action row. If updating
-  // fails, its two recovery actions follow it in keyboard order.
+  // The update row sits after the devices, the compact action row and the
+  // folder row. If updating fails, its two recovery actions follow it in
+  // keyboard order.
   readonly property int helperUpdateIndex: !helperUpdateOffered
     ? -1
-    : (receiverEnabled && backendReady ? devices.length + 2 : devices.length)
+    : (receiverEnabled && backendReady ? devices.length + 3 : devices.length)
   readonly property int helperCopyCommandIndex: helperUpdateError === "" || helperUpdateIndex < 0
     ? -1 : helperUpdateIndex + 1
   readonly property int helperCopyLinkIndex: helperCopyCommandIndex < 0
@@ -164,6 +166,7 @@ Panel {
   // they stay with the view and hand their result to the engine.
   function selectFiles() { if (!selectedDevice || picker.running) return; picker.launched=false; picker.running = true }
   function selectFolder() { if (!selectedDevice || folderPicker.running) return; folderPicker.launched=false; folderPicker.running = true }
+  function chooseDownloadDir() { if (downloadDirPicker.running) return; downloadDirPicker.launched=false; downloadDirPicker.running = true }
   function sendClipboard() { if (!selectedDevice || clipboard.running) return; clipboard.launched=false; clipboard.running = true }
   function copyReceivedText() { clipboardWriter.launched=false; clipboardWriter.running=true }
 
@@ -194,7 +197,7 @@ Panel {
         ? helperCopyLinkIndex
         : (helperUpdateIndex>=0
           ? helperUpdateIndex
-          : (receiverEnabled&&backendReady ? devices.length+1 : Math.max(-1,devices.length-1)))
+          : (receiverEnabled&&backendReady ? devices.length+2 : Math.max(-1,devices.length-1)))
       if (dx !== 0 && helperCopyCommandIndex >= 0 && selectedIndex >= helperCopyCommandIndex) {
         selectedIndex = Math.max(helperCopyCommandIndex, Math.min(helperCopyLinkIndex, selectedIndex + dx))
         return
@@ -228,6 +231,7 @@ Panel {
       else if (selectedIndex < devices.length) chooseDevice(selectedIndex)
       else if (receiverEnabled && backendReady && selectedIndex === devices.length) forceFullDiscovery()
       else if (receiverEnabled && backendReady && selectedIndex === devices.length+1) openIncomingPinSettings()
+      else if (receiverEnabled && backendReady && selectedIndex === devices.length+2) chooseDownloadDir()
     }
     else if (viewState === "target") selectedIndex === 0 ? selectFiles() : (selectedIndex === 1 ? selectFolder() : (selectedIndex === 2 ? sendClipboard() : goBack()))
     else if (viewState === "incoming") selectedIndex === 0 ? declineIncoming() : acceptIncoming()
@@ -312,6 +316,22 @@ Panel {
       if (paths.length) root.beginOutgoing({kind:"files",device:root.selectedDevice,paths:paths})
     }
   }
+  // A cancelled chooser changes nothing. A chosen folder goes to the engine,
+  // which persists it and restarts the helper to apply it.
+  Process {
+    id: downloadDirPicker
+    property bool launched: false
+    command: ["omarchy-file-select","--title","Save received files to","--directory"]
+    running: false
+    stdout: StdioCollector { id: downloadDirPickerOutput; waitForEnd: true }
+    onStarted: downloadDirPicker.launched=true
+    onRunningChanged: if (!running && !downloadDirPicker.launched) root.failWith("The file chooser could not be started")
+    onExited: function(code) {
+      if (code > 1) { root.failWith("The file chooser did not open"); return }
+      var path=String(downloadDirPickerOutput.text || "").split("\n")[0]
+      if (code === 0 && path !== "" && root.engine) root.engine.setDownloadDir(path)
+    }
+  }
   Process {
     id: clipboard
     property bool launched: false
@@ -389,6 +409,7 @@ Panel {
             Button { width:(parent.width-parent.spacing)/2; bordered:false; iconText:"󰑐"; text:"Rescan"; tooltipText:"Search for new devices"; foreground:root.foreground; fontFamily:root.fontFamily; hasCursor:root.cursorActive&&root.selectedIndex===root.devices.length; onHovered:function(v){root.noteHover(v,root.devices.length)}; onClicked:root.forceFullDiscovery() }
             Button { width:(parent.width-parent.spacing)/2; bordered:false; iconText:"󰌾"; text:"PIN · "+(root.incomingPinEnabled?"On":"Off"); tooltipText:"Incoming PIN settings"; foreground:root.foreground; fontFamily:root.fontFamily; hasCursor:root.cursorActive&&root.selectedIndex===root.devices.length+1; onHovered:function(v){root.noteHover(v,root.devices.length+1)}; onClicked:root.openIncomingPinSettings() }
           }
+          Button { visible:nearbyActions.visible; width:parent.width; leftAlign:true; bordered:false; iconText:"󰉋"; text:"Save to · "+Model.folderName(root.saveDirectory); tooltipText:"Received files go to "+root.saveDirectory+". Choose another folder."; foreground:root.foreground; fontFamily:root.fontFamily; hasCursor:root.cursorActive&&root.selectedIndex===root.devices.length+2; onHovered:function(v){root.noteHover(v,root.devices.length+2)}; onClicked:root.chooseDownloadDir() }
 
           // The checkout pins immutable helper bytes. The launcher resolves
           // them outside the plugin tree, and this action retries/prefetches

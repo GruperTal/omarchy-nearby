@@ -203,4 +203,20 @@ assert.deepEqual(Model.barEntry({version:1, plugins:[{id:"oma.nearby",receiverEn
 assert.equal(Model.barEntry({version:1, bar:{layout:{right:[null,"other.plugin",42]}}}, "oma.nearby"), null)
 assert.equal(Model.barEntry({version:1, plugins:["oma.nearby"]}, "oma.nearby"), null)
 
+// The folder for received files is read from the entry. Only an absolute path
+// is a choice: the helper ignores anything else, so showing it would name a
+// folder that is not used.
+assert.equal(Model.downloadDirIn({downloadDir: "/home/someone/Pictures/Phone"}), "/home/someone/Pictures/Phone")
+for (const value of ["", "Pictures", "~/Pictures", "./in", null, undefined, 42, ["/tmp"], {path: "/tmp"}]) {
+  assert.equal(Model.downloadDirIn({downloadDir: value}), "", `${JSON.stringify(value)} is not a folder choice`)
+}
+assert.equal(Model.downloadDirIn(null), "")
+assert.equal(Model.downloadDirIn({}), "")
+assert.equal(Model.folderName("/home/someone/Downloads"), "Downloads")
+assert.equal(Model.folderName("/home/someone/Downloads/"), "Downloads")
+assert.equal(Model.folderName("/"), "/")
+assert.equal(Model.folderName(""), "/")
+assert.equal(Model.folderName("/data/" + "x".repeat(40)), "x".repeat(23) + "…",
+  "a long folder name must be cut: the kit's buttons do not elide")
+
 console.log("Model tests passed")

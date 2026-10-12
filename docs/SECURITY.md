@@ -83,7 +83,8 @@ reported after an atomic rename has occurred; in that case durability is not
 guaranteed.
 
 The descriptor-based guarantees above apply to Nearby's private persistent
-security state. Incoming downloads follow the configured Downloads location
+security state. Incoming downloads follow the folder chosen in the panel, which
+the helper receives as `XDG_DOWNLOAD_DIR`, or else the configured Downloads location
 and the vendored LocalSend receive path. To find that location the helper
 reads `user-dirs.dirs` without blocking on a FIFO, only as a regular file owned
 by the user or root, and at most 16 KiB of it; otherwise it uses `~/Downloads`.

@@ -189,6 +189,21 @@ function receiverEnabledIn(entry) {
   return !!entry && entry.settings.receiverEnabled !== false
 }
 
+// The folder for received files, when the entry names one. The helper ignores
+// a relative location, so one is treated here as no choice at all rather than
+// shown as a folder that would not be used.
+function downloadDirIn(settings) {
+  var value = settings ? settings.downloadDir : ""
+  return typeof value === "string" && value.charAt(0) === "/" ? value : ""
+}
+
+// A folder's own name, short enough for a button: the kit's buttons do not
+// elide, and the full path is shown in the tooltip.
+function folderName(path) {
+  var name = String(path || "").replace(/\/+$/, "").split("/").pop() || "/"
+  return name.length > 24 ? name.slice(0, 23) + "…" : name
+}
+
 function helperVersionMatches(pluginVersion, helperVersion) {
   return String(pluginVersion || "") !== "" && String(pluginVersion) === String(helperVersion || "")
 }
@@ -270,4 +285,4 @@ function manifestMinHelperVersion(text, pluginId) {
   }
 }
 
-if (typeof module !== "undefined") module.exports = { parseLine, upsertDevice, snapshotDevices, iconFor, formatBytes, incomingSummary, notificationText, enqueueIncoming, removeIncoming, currentIncoming, outgoingCommand, viewAfterOutgoing, parseShellConfig, barEntry, hasStringBarEntry, promoteStringBarEntry, receiverEnabledIn, helperVersionMatches, compareVersions, helperSatisfies, manifestVersion, manifestMinHelperVersion, MAX_DEVICES }
+if (typeof module !== "undefined") module.exports = { parseLine, upsertDevice, snapshotDevices, iconFor, formatBytes, incomingSummary, notificationText, enqueueIncoming, removeIncoming, currentIncoming, outgoingCommand, viewAfterOutgoing, parseShellConfig, barEntry, hasStringBarEntry, promoteStringBarEntry, receiverEnabledIn, downloadDirIn, folderName, helperVersionMatches, compareVersions, helperSatisfies, manifestVersion, manifestMinHelperVersion, MAX_DEVICES }
