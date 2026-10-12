@@ -109,8 +109,8 @@ do not paste private clipboard contents into a bug report.
 
 If you chose a [folder for received files](USAGE.md#folder-for-received-files)
 and the receiver no longer starts, check that the folder still exists and is
-writable, or remove `downloadDir` from Nearby's entry in
-`~/.config/omarchy/shell.json`.
+writable, or choose **Use Downloads** in the panel to go back to your
+Downloads folder.
 
 Check the panel error and permissions on the
 [documented storage locations](USAGE.md#storage). The download directory must be

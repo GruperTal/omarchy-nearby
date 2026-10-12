@@ -75,12 +75,17 @@ choose the folder while no transfer is running, because a restart ends one.
 
 The choice is stored as `downloadDir` in Nearby's entry in
 `~/.config/omarchy/shell.json`, beside the receiver switch, and is handed to
-the helper as `XDG_DOWNLOAD_DIR`. To go back to the Downloads lookup described
-under [storage](#storage), choose your Downloads folder again or remove
-`downloadDir` from the entry. A folder that is missing is created when the
-receiver starts. If it cannot be created, for example because it is on a drive
-that is no longer connected, the receiver does not start and the panel names
-the folder; remove `downloadDir` or reconnect the drive.
+the helper as `XDG_DOWNLOAD_DIR`. While a folder is chosen, **Use Downloads**
+under that row removes the choice, which goes back to the Downloads lookup
+described under [storage](#storage). Your home folder and the folders above it
+cannot be chosen: received files keep the names their sender gave them, so
+they belong in a folder of their own.
+
+A folder that is missing is created when the receiver starts. If it cannot be
+created, for example because it is on a drive that is no longer connected, the
+receiver does not start and the panel names the folder. **Use Downloads**
+stays in the panel then and starts the receiver again. So does reconnecting
+the drive and turning Nearby off and on.
 
 ## Incoming PIN protection
 

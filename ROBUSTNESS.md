@@ -600,8 +600,10 @@ complete until those versions and results are written down.
     folder: the receiver must restart once, the row must name the folder, and a
     received file must land there. Restart the shell and confirm the folder is
     still used. Set `downloadDir` to a path that cannot be created and confirm
-    the panel names it after the retries; remove it and confirm files go to
-    Downloads again.
+    the panel names it after the retries and still offers **Use Downloads**;
+    choose it and confirm the receiver starts, `downloadDir` is gone from the
+    entry and files go to Downloads again. Choose your home folder and confirm
+    it is refused with the reason.
 
 ## Result record
 

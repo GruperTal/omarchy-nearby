@@ -212,6 +212,16 @@ for (const value of ["", "Pictures", "~/Pictures", "./in", null, undefined, 42, 
 }
 assert.equal(Model.downloadDirIn(null), "")
 assert.equal(Model.downloadDirIn({}), "")
+// The home folder and the folders above it are not a destination: a sender
+// names the files and folders, which would land among the user's own.
+for (const path of ["/home/someone", "/home/someone/", "/home", "/", "//home//someone", "/home/someone/Pictures/..", "/home/./someone"]) {
+  assert.equal(Model.containsHome(path, "/home/someone"), true, `${path} holds the home folder`)
+}
+for (const path of ["/home/someone/Downloads", "/home/someone/Pictures/Phone", "/home/someone2", "/home/other", "/data/in", "/run/media/someone/Stick"]) {
+  assert.equal(Model.containsHome(path, "/home/someone"), false, `${path} does not hold the home folder`)
+}
+assert.equal(Model.containsHome("/", ""), true, "without a known home folder the root is still refused")
+assert.equal(Model.containsHome("/data/in", ""), false)
 assert.equal(Model.folderName("/home/someone/Downloads"), "Downloads")
 assert.equal(Model.folderName("/home/someone/Downloads/"), "Downloads")
 assert.equal(Model.folderName("/"), "/")

@@ -65,6 +65,7 @@ Item {
   // the effective location whether or not a folder was chosen.
   property string saveDirectory: ""
   property bool restartPending: false
+  readonly property string homeDir: Quickshell.env("HOME") || ""
 
   property string pluginVersion: ""
   property string minHelperVersion: ""
@@ -267,6 +268,8 @@ Item {
   function persistSettings(changes) {
     if (!shell) return
     var settings = Object.assign({}, pluginSettings, changes)
+    // A change to undefined removes the setting from the entry.
+    for (var key in settings) if (settings[key] === undefined) delete settings[key]
     if (hasLegacyShellConfig
         && Model.hasStringBarEntry(effectiveShellConfig, moduleEntryId)
         && typeof shell.mutateShellConfig === "function") {
@@ -279,15 +282,34 @@ Item {
   }
   function setDownloadDir(path) {
     if (Model.downloadDirIn({ downloadDir: path }) === "" || path === downloadDir) return
+    if (Model.containsHome(path, homeDir)) {
+      // Said only while the list the chooser was opened from is still shown,
+      // so it cannot take the place of a request that arrived meanwhile.
+      if (viewState === "nearby") {
+        viewState = "error"
+        reportFailure("Folder not used", "Received files keep the names their sender gave them, so they are not saved straight into your home folder or a folder above it. Choose a folder inside it.")
+      }
+      return
+    }
     persistSettings({ downloadDir: path })
   }
+  // Going back to Downloads removes the setting rather than naming a folder,
+  // so the location follows user-dirs.dirs again.
+  function useDownloads() { if (downloadDir !== "") persistSettings({ downloadDir: undefined }) }
   // A stopped helper is started again by the same bounded restart that covers
   // one that exits on its own, so asking it to stop is all a restart takes. It
   // then starts with the environment as it is now.
   function restartBackend() {
-    if (!backend.running || shutdownPending) return
-    restartPending = true
-    send({command:"shutdown"})
+    if (shutdownPending) return
+    if (backend.running) { restartPending = true; send({command:"shutdown"}); return }
+    // A receiver that gave up, as it does when the previous folder could not
+    // be created, gets its attempts back for the new one. The timer starts it
+    // on the next turn, once the environment of the helper follows the setting.
+    if (!receiverEnabled || backendVersionMismatch || helperMissing) return
+    backendRestart.attempts = 0
+    backendRestart.interval = 0
+    backendRestart.restart()
+    reportFailure("Starting receiver…", "")
   }
   function toggleReceiver() {
     if (shutdownPending) return
@@ -497,7 +519,7 @@ Item {
         // The helper does not say why it stopped before it was ready, and a
         // chosen folder that has gone away is the one cause the user set up.
         reportFailure("Could not start",
-          "Nearby receiver could not start. Check that the folder for received files is available: " + downloadDir + ". To go back to Downloads, remove downloadDir from Nearby's entry in ~/.config/omarchy/shell.json.")
+          "Nearby receiver could not start. Check that the folder for received files is available: " + downloadDir + ". Use Downloads goes back to your Downloads folder.")
       } else {
         reportFailure("Could not start", "Nearby receiver could not start.")
       }

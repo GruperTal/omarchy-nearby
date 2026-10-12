@@ -197,6 +197,24 @@ function downloadDirIn(settings) {
   return typeof value === "string" && value.charAt(0) === "/" ? value : ""
 }
 
+// Whether a folder is the home directory or one that contains it. Received
+// files and folders keep the names their sender gave them, and only a name that
+// is already taken is changed, so saving straight into such a folder would let
+// an accepted transfer add files and folders among the user's own. The paths
+// are compared as written, without following links.
+function containsHome(path, home) {
+  function segments(value) {
+    var kept = []
+    String(value || "").split("/").forEach(function(segment) {
+      if (segment === "..") kept.pop()
+      else if (segment !== "" && segment !== ".") kept.push(segment)
+    })
+    return kept
+  }
+  var folder = segments(path), target = segments(home)
+  return folder.length <= target.length && folder.every(function(segment, index) { return segment === target[index] })
+}
+
 // A folder's own name, short enough for a button: the kit's buttons do not
 // elide, and the full path is shown in the tooltip.
 function folderName(path) {
@@ -285,4 +303,4 @@ function manifestMinHelperVersion(text, pluginId) {
   }
 }
 
-if (typeof module !== "undefined") module.exports = { parseLine, upsertDevice, snapshotDevices, iconFor, formatBytes, incomingSummary, notificationText, enqueueIncoming, removeIncoming, currentIncoming, outgoingCommand, viewAfterOutgoing, parseShellConfig, barEntry, hasStringBarEntry, promoteStringBarEntry, receiverEnabledIn, downloadDirIn, folderName, helperVersionMatches, compareVersions, helperSatisfies, manifestVersion, manifestMinHelperVersion, MAX_DEVICES }
+if (typeof module !== "undefined") module.exports = { parseLine, upsertDevice, snapshotDevices, iconFor, formatBytes, incomingSummary, notificationText, enqueueIncoming, removeIncoming, currentIncoming, outgoingCommand, viewAfterOutgoing, parseShellConfig, barEntry, hasStringBarEntry, promoteStringBarEntry, receiverEnabledIn, downloadDirIn, containsHome, folderName, helperVersionMatches, compareVersions, helperSatisfies, manifestVersion, manifestMinHelperVersion, MAX_DEVICES }

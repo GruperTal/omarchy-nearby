@@ -162,7 +162,7 @@ const functionNames = [
   "openIncomingPinSettings", "beginIncomingPinEdit", "requestDisableIncomingPin",
   "cancelIncomingPinSettings", "submitIncomingPin", "confirmDisableIncomingPin",
   "clearSecretInputs",
-  "goBack", "selectFiles", "selectFolder", "chooseDownloadDir", "sendClipboard", "copyReceivedText", "moveCursor", "activateCursor",
+  "goBack", "selectFiles", "selectFolder", "chooseDownloadDir", "useDownloads", "sendClipboard", "copyReceivedText", "moveCursor", "activateCursor",
   "retryHelper", "copyText", "copyUpdateCommand", "copyRepositoryLink", "noteHover",
 ]
 
@@ -195,6 +195,7 @@ function stubEngine() {
     noteTextCopied: record("noteTextCopied"),
     beginOutgoing: record("beginOutgoing"),
     startHelperUpdate: record("startHelperUpdate"),
+    useDownloads: record("useDownloads"),
     viewOpened: record("viewOpened"),
     viewClosed: record("viewClosed"),
   }
@@ -221,6 +222,7 @@ function panel(initial = {}) {
     picker: {running: false, launched: false},
     folderPicker: {running: false, launched: false},
     downloadDirPicker: {running: false, launched: false},
+    downloadDir: "",
     clipboard: {running: false, launched: false},
     clipboardWriter: {running: false, launched: false},
     textCopier: {running: false, launched: false, payload: ""},
@@ -248,7 +250,7 @@ function panel(initial = {}) {
     ...initial,
   }
   context.engine = engine
-  for (const name of ["helperUpdateIndex", "helperCopyCommandIndex", "helperCopyLinkIndex"]) {
+  for (const name of ["useDownloadsIndex", "helperUpdateIndex", "helperCopyCommandIndex", "helperCopyLinkIndex"]) {
     const expression = intBindingExpression(name)
     Object.defineProperty(context, name, {
       enumerable: true,
@@ -329,6 +331,45 @@ assert.match(source, /text:"Save to · "\+Model\.folderName\(root\.saveDirectory
   assert.equal(state.downloadDirPicker.running, false,
     "the folder row is hidden with the action row, so its index must not act while the receiver is not ready")
 }
+
+// A chosen folder adds the way back to Downloads under the folder row, and
+// keeps it in the panel when that folder stops the receiver from starting,
+// which hides the folder row with the rest of the actions.
+{
+  const state = panel({viewState: "nearby", devices: [{alias: "A"}], backendReady: true, downloadDir: "/data/in", selectedIndex: 3})
+  assert.equal(state.useDownloadsIndex, 4)
+  state.moveCursor(0, 1)
+  assert.equal(state.selectedIndex, 4, "Use Downloads follows the folder row")
+  state.moveCursor(0, 1)
+  assert.equal(state.selectedIndex, 4, "and is the last stop when no update is offered")
+  state.activateCursor()
+  assert.equal(callNames(state).at(-1), "useDownloads")
+  assert.equal(state.downloadDirPicker.running, false)
+}
+{
+  const state = panel({viewState: "nearby", devices: [], backendReady: false, downloadDir: "/run/media/someone/Stick/in", selectedIndex: -1})
+  assert.equal(state.useDownloadsIndex, 0)
+  state.moveCursor(0, 1)
+  assert.equal(state.selectedIndex, 0, "with the receiver down the row is reachable right under the switch")
+  state.moveCursor(0, 1)
+  assert.equal(state.selectedIndex, 0)
+  state.activateCursor()
+  assert.equal(callNames(state).at(-1), "useDownloads",
+    "a folder that keeps the receiver from starting must be removable from the panel")
+}
+{
+  assert.equal(panel({viewState: "nearby", backendReady: true}).useDownloadsIndex, -1,
+    "with no folder chosen there is nothing to go back from")
+  assert.equal(panel({viewState: "nearby", receiverEnabled: false, backendReady: false, downloadDir: "/data/in"}).useDownloadsIndex, -1)
+  const blocked = panel({viewState: "nearby", backendReady: false, helperUpdateOffered: true, downloadDir: "/data/in"})
+  assert.equal(blocked.useDownloadsIndex, -1, "an unusable helper owns the view, and the folder is not what stopped it")
+  assert.equal(blocked.helperUpdateIndex, 0)
+  const updating = panel({viewState: "nearby", devices: [{alias: "A"}], backendReady: true, helperUpdateOffered: true, downloadDir: "/data/in"})
+  assert.equal(updating.useDownloadsIndex, 4)
+  assert.equal(updating.helperUpdateIndex, 5, "the update row must not share an index with Use Downloads")
+}
+assert.match(source, /Button \{ visible:root\.useDownloadsIndex>=0;[^\n]*text:"Use Downloads"[^\n]*root\.selectedIndex===root\.useDownloadsIndex[^\n]*root\.noteHover\(v,root\.useDownloadsIndex\)[^\n]*onClicked:root\.useDownloads\(\)/,
+  "Use Downloads is drawn where the keyboard index says it is")
 
 // An unusable helper hides the action row, so the update button takes the
 // index rescan would have had. Keyboard users have to be able to reach it:
