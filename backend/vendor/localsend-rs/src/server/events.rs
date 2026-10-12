@@ -106,6 +106,7 @@ pub enum TransferDecision {
 pub struct PendingRequest {
     request_id: String,
     sender: DeviceInfo,
+    sender_certificate: Option<String>,
     files: HashMap<FileId, FileMetadata>,
     responder: oneshot::Sender<TransferDecision>,
 }
@@ -122,6 +123,7 @@ impl PendingRequest {
             Self {
                 request_id: FileId::new().to_string(),
                 sender,
+                sender_certificate: None,
                 files,
                 responder: tx,
             },
@@ -129,8 +131,25 @@ impl PendingRequest {
         )
     }
 
+    pub(crate) fn with_sender_certificate(mut self, fingerprint: Option<String>) -> Self {
+        self.sender_certificate = fingerprint;
+        self
+    }
+
+    /// What the sender declared about itself. None of it is verified: its
+    /// `fingerprint` is a claim, which any peer that has seen an announcement
+    /// can repeat.
     pub fn sender(&self) -> &DeviceInfo {
         &self.sender
+    }
+
+    /// Lowercase hex SHA-256 of the TLS client certificate the sender proved
+    /// possession of in the handshake, which is its LocalSend fingerprint.
+    /// `None` when it presented no certificate, or over plain HTTP. This, not
+    /// the declared fingerprint, is what a decision made without asking the
+    /// user has to rest on.
+    pub fn sender_certificate_fingerprint(&self) -> Option<&str> {
+        self.sender_certificate.as_deref()
     }
 
     pub fn request_id(&self) -> &str {

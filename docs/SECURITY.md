@@ -14,6 +14,25 @@ PIN submissions from one IP cause subsequent requests from that IP to receive
 LocalSend's `429 Too Many Requests` response until the receiver security state
 changes or the receiver restarts.
 
+A transfer is accepted without asking only from a device you turned
+**Auto-accept** on for. The receiver requests a TLS client certificate from
+every sender, without requiring one, and verifies that the sender holds its
+private key. A request skips the prompt only when the SHA-256 of that proved
+certificate is in the trusted list. The fingerprint a sender declares in the
+request is never used for this: fingerprints are announced on the network, so
+a device that repeats a trusted one, or presents no certificate, is asked
+about like any other. Over plain HTTP nothing can be proved, so nothing is
+accepted without asking.
+
+Trusting a device is still your decision about an entry in the device list,
+and that list comes from unauthenticated discovery: turn Auto-accept on only
+for an entry you know is your own device, for example one you have just
+exchanged a transfer with. Anyone who obtains a trusted device, or its
+LocalSend private key, can send files to this computer without a prompt while
+on the same network. A trusted device still cannot choose where files go or
+overwrite existing ones, and it is still subject to the incoming PIN and the
+receiver's limits.
+
 LocalSend discovery itself is LAN discovery and should not be treated as an
 authenticated pairing mechanism. Use Nearby on networks you trust. Once a
 device has been seen over HTTPS, the helper refuses plain HTTP announcements
@@ -40,8 +59,8 @@ so it is neither parsed as a notification option nor rendered as markup.
 
 ## Persistent security state
 
-The incoming PIN is stored in a private settings file; it is not shown again in
-the UI. This is local credential storage, not a claim that the PIN is encrypted
+The incoming PIN and the list of trusted devices are stored in a private
+settings file; the PIN is not shown again in the UI. This is local credential storage, not a claim that the PIN is encrypted
 at rest. Do not share the settings file. The helper walks the absolute state
 path from the filesystem root using directory descriptors and refuses symlinks
 at every component. Root-owned system ancestors and ancestors owned by the

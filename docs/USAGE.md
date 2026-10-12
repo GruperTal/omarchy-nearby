@@ -44,6 +44,26 @@ duplicate notification; requests waiting behind another view can still notify.
 On multiple monitors, the views share one receiver. Closing one popup does not
 stop active discovery needed by another open popup.
 
+## Accept from a device without asking
+
+Select one of your own devices in Nearby and turn **Auto-accept** on. Files
+and text it sends are then accepted without the Accept/Decline prompt: a file
+is saved and announced with a notification once it has arrived, and text is
+shown as usual. Turn it off from the same row.
+
+Nearby recognises the device by the TLS certificate it proves when it
+connects, not by the name or fingerprint it announces, which any device on the
+network can copy. The row is therefore offered only for devices reached over
+HTTPS, and a sender that does not present its certificate, or presents a
+different one, gets the normal prompt. An incoming PIN, when enabled, still has
+to be supplied by a trusted device.
+
+Up to 32 devices can be trusted. They are stored beside the incoming PIN in
+`settings.json`, with the alias the device had when you trusted it. To stop
+trusting a device that is no longer nearby, and so cannot be selected, run
+`omarchy-shell oma.nearby forgetTrusted`, which stops trusting all of them.
+See [security](SECURITY.md) for what trusting a device means.
+
 ## Incoming PIN protection
 
 Open **Incoming PIN** from Nearby's device list to enable, change or disable
@@ -69,7 +89,7 @@ receiver restarts. Missing PINs do not consume an attempt. See
 | Data | Location |
 | --- | --- |
 | Published helpers | `$XDG_DATA_HOME/omarchy-nearby/helpers`, default `~/.local/share/omarchy-nearby/helpers` |
-| Incoming PIN settings | `$XDG_STATE_HOME/omarchy-nearby/settings.json`, default `~/.local/state/omarchy-nearby/settings.json` |
+| Incoming PIN and trusted devices | `$XDG_STATE_HOME/omarchy-nearby/settings.json`, default `~/.local/state/omarchy-nearby/settings.json` |
 | Persistent TLS identity | `identity.json` alongside the PIN settings |
 | Received files | `XDG_DOWNLOAD_DIR`, then the setting in `$XDG_CONFIG_HOME/user-dirs.dirs` (default `~/.config/user-dirs.dirs`), then `~/Downloads`. Relative locations are ignored, as are `user-dirs.dirs` files that are not regular, are owned by another user or exceed 16 KiB |
 
@@ -90,6 +110,7 @@ These commands address the loaded `oma.nearby` service in the Omarchy shell:
 | `omarchy-shell oma.nearby receiverOff` | Disable receiving |
 | `omarchy-shell oma.nearby receiverToggle` | Toggle receiving |
 | `omarchy-shell oma.nearby status` | Report service state as JSON |
+| `omarchy-shell oma.nearby forgetTrusted` | Stop accepting from every trusted device without asking |
 | `omarchy-shell oma.nearby retryHelper` | Request verification/repair of the selected published helper |
 
 Popup commands do not toggle the receiver. An `ok` response acknowledges a

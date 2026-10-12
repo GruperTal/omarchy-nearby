@@ -39,6 +39,13 @@ consumes JSON events from stdout. Diagnostics go to stderr. Command and event
 definitions live in [the helper](../backend/src/main.rs); producers and consumers
 on the shell side live in [Service.qml](../Service.qml).
 
+The helper, not the shell, decides whether a request skips the prompt. The
+vendored receiver reports the TLS client certificate a sender proved, and the
+helper accepts on its own only when that certificate is in the trusted list it
+loaded from its settings. The shell mirrors the list, asks for changes by
+fingerprint, and is told about such a transfer with `incoming_auto_accepted`
+instead of `incoming_request`.
+
 Request IDs and transfer IDs correlate decisions, progress and terminal events.
 Preserve them when extending the protocol so a late event cannot overwrite a
 new transfer. Incoming and outgoing transfers have separate state.

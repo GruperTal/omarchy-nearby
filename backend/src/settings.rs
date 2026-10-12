@@ -11,8 +11,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const SETTINGS_VERSION: u32 = 1;
 const MAX_INCOMING_PIN_LENGTH: usize = 64;
 const MAX_SETTINGS_BYTES: usize = 16 * 1024;
+/// Devices whose transfers are accepted without asking. Small on purpose: it
+/// is a list of the user's own devices, and it has to fit the settings cap.
+const MAX_TRUSTED_DEVICES: usize = 32;
+const MAX_TRUSTED_ALIAS_CHARS: usize = 128;
 #[cfg(test)]
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// A device trusted by the certificate it proves in the TLS handshake. The
+/// alias is only a label for the user; it identifies nothing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustedDevice {
+    pub fingerprint: String,
+    pub alias: String,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,6 +32,8 @@ pub struct Settings {
     version: u32,
     #[serde(default)]
     pub incoming_pin: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trusted_devices: Vec<TrustedDevice>,
 }
 
 impl Default for Settings {
@@ -27,8 +41,20 @@ impl Default for Settings {
         Self {
             version: SETTINGS_VERSION,
             incoming_pin: None,
+            trusted_devices: Vec::new(),
         }
     }
+}
+
+/// A certificate fingerprint in the one form it is stored and compared in:
+/// the 64 lowercase hex digits of a SHA-256.
+pub fn certificate_fingerprint(value: &str) -> Option<String> {
+    (value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| value.to_ascii_lowercase())
+}
+
+fn valid_trusted_alias(alias: &str) -> bool {
+    alias.chars().count() <= MAX_TRUSTED_ALIAS_CHARS && !alias.chars().any(char::is_control)
 }
 
 pub fn valid_incoming_pin(pin: &str) -> bool {
@@ -49,6 +75,20 @@ fn validate(settings: &Settings) -> Result<()> {
         .is_some_and(|pin| !valid_incoming_pin(pin))
     {
         return Err(anyhow!("invalid incoming PIN configuration"));
+    }
+    if settings.trusted_devices.len() > MAX_TRUSTED_DEVICES {
+        return Err(anyhow!("too many trusted devices"));
+    }
+    for (index, device) in settings.trusted_devices.iter().enumerate() {
+        let stored_form = certificate_fingerprint(&device.fingerprint);
+        if stored_form.as_deref() != Some(device.fingerprint.as_str())
+            || !valid_trusted_alias(&device.alias)
+            || settings.trusted_devices[..index]
+                .iter()
+                .any(|earlier| earlier.fingerprint == device.fingerprint)
+        {
+            return Err(anyhow!("invalid trusted device configuration"));
+        }
     }
     Ok(())
 }
@@ -111,11 +151,33 @@ pub fn save(path: &Path, settings: &Settings) -> Result<()> {
 
 pub fn updated(current: &Settings, incoming_pin: Option<String>) -> Result<Settings> {
     let next = Settings {
-        version: current.version,
         incoming_pin,
+        ..current.clone()
     };
     validate(&next)?;
     Ok(next)
+}
+
+/// `current` with one device trusted. Trusting a device again only refreshes
+/// its label.
+pub fn with_trusted_device(current: &Settings, fingerprint: &str, alias: &str) -> Result<Settings> {
+    let fingerprint =
+        certificate_fingerprint(fingerprint).ok_or_else(|| anyhow!("invalid fingerprint"))?;
+    let mut next = without_trusted_device(current, &fingerprint);
+    next.trusted_devices.push(TrustedDevice {
+        fingerprint,
+        alias: alias.to_string(),
+    });
+    validate(&next)?;
+    Ok(next)
+}
+
+/// `current` without a device. Removing one that is not trusted changes nothing.
+pub fn without_trusted_device(current: &Settings, fingerprint: &str) -> Settings {
+    let mut next = current.clone();
+    next.trusted_devices
+        .retain(|device| !device.fingerprint.eq_ignore_ascii_case(fingerprint));
+    next
 }
 
 #[cfg(test)]
@@ -225,6 +287,96 @@ mod tests {
         assert!(fs::metadata(&path).unwrap().len() < MAX_SETTINGS_BYTES as u64);
         assert_eq!(load(&path).unwrap(), settings);
         assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn trusted_devices_round_trip_and_survive_a_pin_change() {
+        let directory = test_directory("trusted");
+        let path = directory.join("settings.json");
+        let upper = "AB".repeat(32);
+        let lower = "ab".repeat(32);
+
+        let trusted = with_trusted_device(&Settings::default(), &upper, "Phone").unwrap();
+        assert_eq!(
+            trusted.trusted_devices,
+            vec![TrustedDevice {
+                fingerprint: lower.clone(),
+                alias: "Phone".into()
+            }],
+            "a fingerprint is stored in the one form it is compared in"
+        );
+        save(&path, &trusted).unwrap();
+        assert_eq!(load(&path).unwrap(), trusted);
+
+        let with_pin = updated(&trusted, Some("Abc-123".into())).unwrap();
+        assert_eq!(
+            with_pin.trusted_devices, trusted.trusted_devices,
+            "changing the PIN must not forget trusted devices"
+        );
+
+        let relabelled = with_trusted_device(&with_pin, &lower, "Pixel").unwrap();
+        assert_eq!(relabelled.trusted_devices.len(), 1, "one entry per device");
+        assert_eq!(relabelled.trusted_devices[0].alias, "Pixel");
+
+        let removed = without_trusted_device(&relabelled, &upper);
+        assert!(removed.trusted_devices.is_empty());
+        assert_eq!(removed.incoming_pin.as_deref(), Some("Abc-123"));
+        assert_eq!(without_trusted_device(&removed, &lower), removed);
+
+        save(&path, &Settings::default()).unwrap();
+        assert!(
+            !fs::read_to_string(&path)
+                .unwrap()
+                .contains("trustedDevices"),
+            "settings without trusted devices keep the document older helpers wrote"
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn invalid_trusted_devices_are_refused_and_fail_closed() {
+        let lower = "ab".repeat(32);
+        for fingerprint in ["", "abc", &"g".repeat(64), &"ab".repeat(33), "sender-fp"] {
+            assert!(
+                with_trusted_device(&Settings::default(), fingerprint, "Phone").is_err(),
+                "expected an invalid fingerprint: {fingerprint}"
+            );
+        }
+        assert!(with_trusted_device(&Settings::default(), &lower, "line\nbreak").is_err());
+        assert!(with_trusted_device(&Settings::default(), &lower, &"x".repeat(129)).is_err());
+
+        let mut full = Settings::default();
+        for index in 0..MAX_TRUSTED_DEVICES {
+            full = with_trusted_device(&full, &format!("{index:064x}"), "Device").unwrap();
+        }
+        assert!(with_trusted_device(&full, &lower, "One too many").is_err());
+        assert!(
+            with_trusted_device(&full, &format!("{:064x}", 0), "Relabelled").is_ok(),
+            "a full list must still let a trusted device be relabelled"
+        );
+
+        let directory = test_directory("trusted-invalid");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("settings.json");
+        let upper = "AB".repeat(32);
+        for data in [
+            format!(
+                r#"{{"version":1,"trustedDevices":[{{"fingerprint":"{upper}","alias":"Phone"}}]}}"#
+            ),
+            format!(
+                r#"{{"version":1,"trustedDevices":[{{"fingerprint":"{lower}","alias":"A"}},{{"fingerprint":"{lower}","alias":"B"}}]}}"#
+            ),
+            r#"{"version":1,"trustedDevices":[{"fingerprint":"short","alias":"Phone"}]}"#
+                .to_string(),
+            r#"{"version":1,"trustedDevices":"all"}"#.to_string(),
+        ] {
+            fs::write(&path, &data).unwrap();
+            assert!(
+                load(&path).is_err(),
+                "a trust list that cannot be read exactly must stop startup: {data}"
+            );
+        }
         fs::remove_dir_all(directory).unwrap();
     }
 

@@ -1,8 +1,9 @@
+use super::client_identity::ClientCertificate;
 use super::events::ServerEvent;
 use super::state::{ServerState, write_body_to_file_with_progress};
 use crate::protocol::{DeviceInfo, FileId, PrepareUploadRequest, PrepareUploadResponse, SessionId};
 use axum::{
-    Json,
+    Extension, Json,
     body::Body,
     extract::{ConnectInfo, Query, State},
     http::StatusCode,
@@ -47,6 +48,7 @@ pub(crate) async fn handle_prepare_upload(
     State(state_ref): State<Arc<RwLock<ServerState>>>,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     Query(params): Query<PrepareUploadParams>,
+    client_certificate: Option<Extension<ClientCertificate>>,
     Json(request): Json<PrepareUploadRequest>,
 ) -> Response {
     // PIN gate runs first, before any session/event work -- a locked-out or
@@ -142,6 +144,10 @@ pub(crate) async fn handle_prepare_upload(
     } else {
         let (pending_request, decision_rx) =
             crate::server::events::PendingRequest::new(request.info.clone(), request.files.clone());
+        // Absent over plain HTTP, where no handshake could prove anything.
+        let pending_request = pending_request.with_sender_certificate(
+            client_certificate.and_then(|Extension(ClientCertificate(fingerprint))| fingerprint),
+        );
         let request_id = pending_request.request_id().to_string();
         reservation.request_id = Some(request_id.clone());
         if events_tx
