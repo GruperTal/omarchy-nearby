@@ -504,8 +504,18 @@ is retained and is superseded by this selection before plugin publication.
 
 The development checkout advances to plugin `1.2.7-dev`; the helper is
 unchanged and already resolves `XDG_DOWNLOAD_DIR` first. The Node suites
-passed. Scenario 23 (choosing a folder in the panel and receiving into it) is
-**Not run**.
+passed.
+
+After review the panel offers **Use Downloads** and refuses the home folder.
+On Omarchy's shell with Quickshell 0.3.1, `downloadDir` was set by hand to a
+path that cannot be created: the helper reported "download destination
+unavailable" and the receiver gave up after its retries. Removing `downloadDir`
+from the entry, which is the write **Use Downloads** makes, started the
+receiver again within a second without touching the receiver switch, and the
+helper had no `XDG_DOWNLOAD_DIR` in its environment. Writing a folder back
+restarted it with that folder. Pressing **Use Downloads** in the panel, the
+refusal of the home folder on screen and the rest of scenario 23 (choosing a
+folder in the panel and receiving into it) are **Not run**.
 
 ## Manual interoperability matrix
 
