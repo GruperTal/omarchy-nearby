@@ -18,6 +18,7 @@ node tests/panel-state.test.js
 node tests/service-state.test.js
 bash tests/launcher.test.sh
 bash tests/helper-repair.test.sh
+bash tests/copy-file.test.sh
 ```
 
 The suites cover peer registry retention/expiry, command correlation, request decisions,
@@ -51,6 +52,14 @@ size/SHA256 enforcement, XDG data storage, offline reuse, corrupt and symlinked
 cache repair, rejected symlinked or other-user-writable cache ancestors,
 concurrent launches, failed/oversized downloads, and the rule
 that published helpers never write into the watched plugin checkout.
+
+The received-file suites cover offering exactly one received file once its
+result is on screen, per-session file counts, results that never reached the
+screen, a type probe that answers late, keyboard reachability of Copy and Done,
+and, for the copy script, PNG passthrough, conversion of other pictures with
+the decoder named by the detected type and the file name kept away from
+ImageMagick, fallback to a file reference without clearing the clipboard, URI
+escaping, temporary file cleanup and refused arguments.
 
 ### Local automated result, 2026-09-22
 
@@ -500,6 +509,19 @@ isolated XDG cache; both prefetch and the cached executable reported 1.2.6. GitH
 dependency alert fixed on main. The previously published helper-v1.2.5 tag
 is retained and is superseded by this selection before plugin publication.
 
+### Received file preview and copy development validation, 2026-10-12
+
+The development checkout advances to plugin `1.2.7-dev`; the helper is
+unchanged. The Node suites and `tests/copy-file.test.sh` passed.
+`bin/nearby-copy-file` was also run by hand with the real `file` 5.48 and
+ImageMagick 7.1.2-31 and a stand-in for `wl-copy`: a 4000×3000 JPEG, a WebP and
+a three-frame GIF each produced PNG data, including a JPEG whose name contains
+brackets, a percent sign and spaces; a JPEG with EXIF orientation 6 and a GPS
+tag came out upright with no metadata; a text file and text renamed to `.jpg`
+or `.png` produced a file reference. Scenario 23 (a real transfer, the preview
+in the panel, the real clipboard and pasting into other applications) is
+**Not run**.
+
 ## Manual interoperability matrix
 
 Run applicable transfer and PIN scenarios with both Android and iOS LocalSend
@@ -580,7 +602,6 @@ complete until those versions and results are written down.
     valid file while preserving its incoming PIN; enable Nearby again and
     confirm that the PIN still applies. Never replace personal settings with
     a FIFO or delete them as a generic recovery step.
-
 22. With an official LocalSend client, send and receive a folder containing
     several nested files and verify exact contents, paths, active file names,
     progress and completion. Receive it again: directories merge and colliding
@@ -590,6 +611,13 @@ complete until those versions and results are written down.
     multiple monitors. Check unreadable folders fail preparation, inner
     symlinks are skipped and hidden components are refused. Record peer OS and
     LocalSend version; Rust loopback tests do not count as this manual pass.
+23. Receive one PNG and one JPEG photo taken in portrait orientation, in
+    separate transfers. Each must show an upright preview with **Copy** and
+    **Done**. Copy each and paste it into a Chromium-based application, a GTK
+    application and an image editor: the picture must arrive upright. Receive a
+    PDF: there must be no preview, and Copy must paste the file into a file
+    manager. Send two pictures in one transfer: the result must stay plain.
+    Receive a text file renamed to `.png`: there must be no preview.
 
 ## Result record
 
@@ -617,6 +645,7 @@ Copy this template for each validation session. Leave unexecuted cases marked
 | 20: desktop integration | Omarchy + peer | Not run | |
 | 21: unsafe settings and recovery | Isolated Omarchy installation | Not run | |
 | 22: folder transfers and lifecycle | Official Android / iOS / desktop client, separate rows | Not run | |
+| 23: received file preview and copy | Omarchy + peer | Not run | |
 
 For failures, identify the exact scenario and attach redacted logs or a
 reproduction. Split grouped rows whenever individual outcomes differ.
