@@ -309,7 +309,8 @@ source digest and tag on a GitHub-hosted runner, and `--version` reported
 
 The PR #22's four original commits were rebased onto `main` at `758e319`,
 preserving Rizmi's authorship. The rebased feature baseline is `3d5f67e`;
-maintainer hardening is added on `feat/folder-transfer-hardened`. Development
+maintainer hardening is recorded at `b85376f` on
+`feat/folder-transfer-hardened`. Development
 versions advance to plugin `1.2.6-dev` and helper/floor `1.2.5`. The committed
 `helper-release.env` deliberately still selects the verified 1.2.4 artifact.
 This development branch requires a local developer helper until a 1.2.5 helper
@@ -319,7 +320,7 @@ metadata. No helper or plugin release has been published by this validation.
 All three Node suites, both Bash distribution suites, Cargo formatting, locked
 check, Clippy with warnings denied, helper tests (92 unit plus the startup
 integration test) and the separate vendor HTTPS suite passed locally. The
-vendor suite retains its existing ignored test; an ignored test is not a pass.
+vendor suite passed 151 tests in total and retains its existing ignored test; an ignored test is not a pass.
 Formatting of the vendored crate and `git diff --check` also passed.
 
 New coverage includes:
@@ -342,6 +343,25 @@ Three regressions were also run against the rebased feature before hardening:
 invalid offer waited for approval; `rejects_unsafe_wire_spellings_without_normalizing`
 failed on `./file`; and a direct missing/unreadable-directory preparation check
 failed because traversal returned success. All three pass after hardening.
+
+The effective diff was also checked against the post-1.2.0 guarantees:
+
+| Baseline | Guarantees retained and exercised |
+| --- | --- |
+| 1.2.0 | Bounded command/text input and peer registry; persistent TLS identity and outgoing client authentication; immutable HTTPS-only helper selection and distribution tests |
+| 1.2.1–1.2.2 | Bounded, no-follow settings/identity state and atomic descriptor-based persistence; unsafe helper-cache ancestor rejection; source files and launcher unchanged |
+| 1.2.3 | Pre-write upload size bounds, one upload per offered file, random partial names, cancellation/progress rollback, 10,000-file cap, connection/body limits and abandoned-prompt cleanup; vendor conformance suites pass |
+| 1.2.4 | Bounded outgoing requests/responses and multicast replies, peer event coalescing and HTTPS protection, plain-text sinks, escaped notification bodies and bounded Downloads config reads; regression suites pass |
+| 1.2.5 | Nearby icon and Commons.Color fix retained by the rebase; QML plain-text and state suites pass |
+
+A live helper-only check on the maintainer workstation reached `ready` with
+helper `1.2.5` on port 53317, using isolated temporary state and Downloads.
+Active multicast and the bounded subnet fallback completed; all peer snapshots
+were empty during the 20-second observation. The process was shut down and the
+installed receiver was still disabled afterwards. The installed plugin was
+not replaced. `omarchy plugin validate` accepted the development checkout.
+This confirms local helper startup, not an official-client transfer or loading
+the changed QML inside the live shell.
 
 These are local automated tests using Rust peers, not official LocalSend
 interoperability or live Quickshell tests. The new manual folder scenario below
