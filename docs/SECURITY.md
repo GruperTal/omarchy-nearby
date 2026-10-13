@@ -38,6 +38,23 @@ Aliases, file names and other text from peers are shown as plain text in the
 panel. Desktop notifications start with fixed text and carry peer text escaped,
 so it is neither parsed as a notification option nor rendered as markup.
 
+## Folder paths
+
+Before reserving a session or requesting approval, the receiver validates every
+offered name after the PIN gate. A relative slash-separated path may contain at
+most 32 directories, 4096 UTF-8 bytes overall and 255 bytes per component. Empty
+segments, `.`/`..`, hidden components, absolute paths, NUL, backslashes and colons
+are rejected. The helper shares those rules on send, bounds accumulation to
+10,000 files and 2 MiB of serialized offer JSON, and fails on unreadable entries.
+
+The receiver refuses existing symlinks at any component of a received path
+before creating parents and again at publication. It never overwrites existing
+files; repeated directory names merge and file collisions get suffixes. These
+checks are pathname-based: a local process able to mutate the Downloads tree
+can race checks and filesystem operations. They do not provide the
+descriptor-based guarantees of private security state below. Remote peers
+cannot create symlinks through the LocalSend file-transfer protocol.
+
 ## Persistent security state
 
 The incoming PIN is stored in a private settings file; it is not shown again in

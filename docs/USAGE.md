@@ -2,16 +2,31 @@
 
 [Documentation index](../README.md#documentation)
 
-## Send files or text
+## Send files, folders or text
 
 Open the peer's LocalSend-compatible app and keep both devices on the same LAN.
 Open Nearby, turn the receiver on, and select the destination.
 
 - **Send files** opens Omarchy's file chooser and supports multiple files.
+- **Send folder** opens the directory chooser. Files are sent with the selected
+  folder name and their relative hierarchy, in alphabetical path order.
 - **Send clipboard** sends the current clipboard as text, not an image or file.
   Outgoing text is limited to 1 MiB of UTF-8 data.
 - If the destination requires a PIN, enter that destination's PIN when asked.
   It is independent of your own Incoming PIN setting.
+
+Folder transfers allow at most 32 directory levels and 10,000 files. Each
+relative file path is limited to 4096 UTF-8 bytes and each component to 255
+bytes. The complete offer must also fit within 2 MiB of JSON; long or escaped
+names can reach that limit with fewer files. Split the selection if needed.
+Hidden components (names starting with `.`), empty segments, traversal, Windows
+separators and invalid UTF-8 names are refused. Unreadable files or directories
+and special files fail the whole preparation rather than reporting a partial
+selection as successfully sent.
+
+A symlink explicitly selected at the top level is resolved and uses its selected
+name. Symlinks inside a selected folder are skipped. Empty directories are not
+represented by the protocol; a selection with no transferable files fails.
 
 Approve the transfer on the destination. Nearby displays progress and offers
 **Cancel** for outgoing transfers. Wait for completion before disconnecting.
@@ -26,7 +41,13 @@ Use **Accept** or **Decline** for the incoming request. Approval requests expire
 ask the sender to retry if the request has expired.
 
 Files go to your configured Downloads directory. Existing files are preserved
-by assigning collision suffixes. Received text appears in the panel; choose
+by assigning collision suffixes. Folder hierarchies are created inside that
+destination; an existing directory is merged with the incoming directory and
+individual colliding files receive suffixes, for example
+`Photos/sub/image (1).jpg`. Incoming paths follow the same path limits and
+hidden-component policy as outgoing paths and are checked before approval.
+Existing symlinks along the destination path are refused before writing and
+again at final publication. Received text appears in the panel; choose
 **Copy** to put it on the clipboard, or **Done** to dismiss it.
 
 Incoming notifications use Omarchy's notification system and respect Do Not

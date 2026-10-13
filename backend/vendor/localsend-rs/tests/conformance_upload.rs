@@ -484,3 +484,36 @@ async fn cancel_stops_an_upload_in_progress() {
         "neither the final file nor a .part may remain"
     );
 }
+
+#[tokio::test]
+async fn nested_uploads_cannot_follow_existing_or_late_parent_symlinks() {
+    let save = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let (_server, _events, port) = auto_accept_server(save.path()).await;
+    for late in [false, true] {
+        let link = save.path().join("parent");
+        if !late {
+            std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+        }
+        let (session, tokens) = prepare_files(port, &[("f1", "parent/file", 3)]).await;
+        if late {
+            std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+        }
+        assert_eq!(
+            upload(port, &session, "f1", &tokens["f1"], b"abc").await,
+            400
+        );
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(save.path()).unwrap().count(), 1);
+        // Path rejection preserves the accepted session; cancel it explicitly.
+        let response = reqwest::Client::new()
+            .post(format!(
+                "http://127.0.0.1:{port}/api/localsend/v2/cancel?sessionId={session}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+        std::fs::remove_file(link).unwrap();
+    }
+}

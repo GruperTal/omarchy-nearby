@@ -305,6 +305,122 @@ The downloaded executable independently matched the release checksum and
 source digest and tag on a GitHub-hosted runner, and `--version` reported
 `omarchy-nearby-helper 1.2.4`. Android interoperability remains **Not run**.
 
+### Folder transfer hardening development validation, 2026-10-13
+
+The PR #22's four original commits were rebased onto `main` at `758e319`,
+preserving Rizmi's authorship. The rebased feature baseline is `3d5f67e`;
+maintainer hardening is recorded at `b85376f` on
+`feat/folder-transfer-hardened`. Development
+versions advance to plugin `1.2.6-dev` and helper/floor `1.2.5`. The committed
+`helper-release.env` deliberately still selects the verified 1.2.4 artifact.
+This development branch requires a local developer helper until a 1.2.5 helper
+is published through Actions, independently verified and selected by exact
+metadata. No helper or plugin release has been published by this validation.
+
+All three Node suites, both Bash distribution suites, Cargo formatting, locked
+check, Clippy with warnings denied, helper tests (92 unit plus the startup
+integration test) and the separate vendor HTTPS suite passed locally. The
+vendor suite passed 151 tests in total and retains its existing ignored test; an ignored test is not a pass.
+Formatting of the vendored crate and `git diff --check` also passed.
+
+New coverage includes:
+
+- Raw path spelling and UTF-8 byte/depth boundaries, validation of every
+  offered path before prompts/reservations, a valid retry after rejection, and
+  unchanged PIN-first authorization and lockout.
+- Missing directories and unreadable files/folders, invalid UTF-8, special
+  files, hidden names and cooperative scan cancellation.
+- Explicit top-level symlink naming and skipping links inside selected trees.
+- The 10,000-file limit for regular-file selections as well as folders; escaped
+  JSON counting during collection and the exact identity/offer envelope bound.
+- Full helper folder transfers over HTTP and pinned HTTPS, in sorted order,
+  with nested collision suffixes, exact saved bytes and omitted empty folders.
+- Existing and late-created parent symlinks refused over HTTP before disk
+  writes, and transfer-ID protection for the active outgoing file name.
+
+Three regressions were also run against the rebased feature before hardening:
+`unsafe_paths_are_rejected_before_reservation_or_prompt` failed because the
+invalid offer waited for approval; `rejects_unsafe_wire_spellings_without_normalizing`
+failed on `./file`; and a direct missing/unreadable-directory preparation check
+failed because traversal returned success. All three pass after hardening.
+
+The effective diff was also checked against the post-1.2.0 guarantees:
+
+| Baseline | Guarantees retained and exercised |
+| --- | --- |
+| 1.2.0 | Bounded command/text input and peer registry; persistent TLS identity and outgoing client authentication; immutable HTTPS-only helper selection and distribution tests |
+| 1.2.1–1.2.2 | Bounded, no-follow settings/identity state and atomic descriptor-based persistence; unsafe helper-cache ancestor rejection; source files and launcher unchanged |
+| 1.2.3 | Pre-write upload size bounds, one upload per offered file, random partial names, cancellation/progress rollback, 10,000-file cap, connection/body limits and abandoned-prompt cleanup; vendor conformance suites pass |
+| 1.2.4 | Bounded outgoing requests/responses and multicast replies, peer event coalescing and HTTPS protection, plain-text sinks, escaped notification bodies and bounded Downloads config reads; regression suites pass |
+| 1.2.5 | Nearby icon and Commons.Color fix retained by the rebase; QML plain-text and state suites pass |
+
+A live helper-only check on the maintainer workstation reached `ready` with
+helper `1.2.5` on port 53317, using isolated temporary state and Downloads.
+Active multicast and the bounded subnet fallback completed; all peer snapshots
+were empty during the 20-second observation. The process was shut down and the
+installed receiver was still disabled afterwards. The installed plugin was
+not replaced. `omarchy plugin validate` accepted the development checkout.
+This confirms local helper startup, not an official-client transfer or loading
+the changed QML inside the live shell.
+
+These are local automated tests using Rust peers, not official LocalSend
+interoperability or live Quickshell tests. At this initial stage the manual folder scenario was **Not run** with official
+clients; the subsequent iPhone session below supplies real transfer results.
+Android and desktop interoperability remain **Not run**.
+
+### Official iPhone folder session, 2026-10-13
+
+- Source: `d682a9c` on `feat/folder-transfer-hardened`, plugin
+  `1.2.6-dev`, local debug helper `1.2.5`; the changed QML is not installed.
+- Peer: the maintainer's iPhone advertised as `Patient Avocado`, protocol
+  `2.2`, HTTPS. The repo's prior session records iPhone 15 / iOS 27.0.1 /
+  LocalSend 1.18.2; those OS/application versions have not been rechecked
+  during this session.
+- Nearby → iPhone: **Pass at the protocol level**. The three-file
+  `Nearby-PR22-folder-test` offer was accepted, the helper uploaded
+  `a.txt`, `sub/b.txt`, `sub/deep/c.bin` in order (4,158 bytes total)
+  and emitted `outgoing_done` over fingerprint-pinned HTTPS.
+- iPhone hierarchy/content: **Pass by round-trip verification**. The maintainer
+  returned the received folder with the original nested wire paths.
+- iPhone → Nearby folder round trip: **Pass**. Approval produced
+  `incoming_accepted`, three `file_received` events at the expected relative
+  paths and `incoming_done`. All three sizes and SHA256 hashes exactly match
+  the original fixture; no `.part` remains.
+- Repeated Nearby → iPhone send: **Pass**. On request, the same three-file
+  fixture was sent again and emitted `outgoing_done`.
+- Incoming PIN and repeated-root collisions: **Pass**. The temporary receiver
+  enabled a PIN, and the official sender reached approval with it. The second
+  return offered six files (8,316 bytes), including the phone's renamed copies.
+  After explicit approval the helper completed all six files. Nine files
+  remain in the destination: the original three plus six new files. The
+  colliding originals became `a (1).txt`, `sub/b (1).txt` and
+  `sub/deep/c (1).bin`; every original and copy has the expected size and
+  SHA256, and no `.part` remains.
+- Decline, cancellation, wrong-PIN lockout and live QML: **Not run in this session**.
+
+The helper used temporary state, identity, fixture and download directories,
+without replacing the installed plugin or changing its PIN/identity files.
+It was shut down at the end. The installed receiver was left disabled in
+accordance with the maintainer's latest instruction.
+
+### Quickshell QML smoke, 2026-10-13
+
+Source `1a98a45` was loaded in an isolated Quickshell 0.3.2 configuration
+against the workstation's real Omarchy `Ui` and `Commons` components. The
+harness instantiated `Service.qml` and `Panel.qml`, including the eager popup
+content and the **Send folder** button. It verified that a disabled receiver
+stays stopped, the helper floor is `1.2.5`, selection switches the live panel
+to the target view, keyboard navigation stops at the fourth action, outgoing
+file-name/progress bindings update, and a stale transfer event cannot replace
+them. The final run loaded without warnings or errors and emitted
+`QML_SMOKE_PASS`. The installed shell/plugin and receiver setting were not
+changed by this check.
+
+This is an actual QML runtime smoke with a small host fixture, not a visual
+review of a popup on the real bar or an interactive file-chooser test. Those
+manual UI actions remain **Not run**. The official iPhone transfers above
+used the real helper separately from this QML harness.
+
 ## Manual interoperability matrix
 
 Run applicable transfer and PIN scenarios with both Android and iOS LocalSend
@@ -386,6 +502,16 @@ complete until those versions and results are written down.
     confirm that the PIN still applies. Never replace personal settings with
     a FIFO or delete them as a generic recovery step.
 
+22. With an official LocalSend client, send and receive a folder containing
+    several nested files and verify exact contents, paths, active file names,
+    progress and completion. Receive it again: directories merge and colliding
+    files receive suffixes inside their original parents. Verify PIN flows,
+    decline, cancel while awaiting approval, cancel during a large upload and
+    immediate retry. Repeat with the panel closed and, where available, on
+    multiple monitors. Check unreadable folders fail preparation, inner
+    symlinks are skipped and hidden components are refused. Record peer OS and
+    LocalSend version; Rust loopback tests do not count as this manual pass.
+
 ## Result record
 
 Copy this template for each validation session. Leave unexecuted cases marked
@@ -411,6 +537,7 @@ Copy this template for each validation session. Leave unexecuted cases marked
 | 17: multiple monitors | Omarchy | Not run | |
 | 20: desktop integration | Omarchy + peer | Not run | |
 | 21: unsafe settings and recovery | Isolated Omarchy installation | Not run | |
+| 22: folder transfers and lifecycle | Official Android / iOS / desktop client, separate rows | Not run | |
 
 For failures, identify the exact scenario and attach redacted logs or a
 reproduction. Split grouped rows whenever individual outcomes differ.

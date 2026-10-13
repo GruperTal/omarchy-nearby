@@ -83,6 +83,16 @@ pub(crate) async fn handle_prepare_upload(
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }
 
+    // Reject every offered wire path before reserving state or emitting a
+    // prompt, including names of files the user might later decline.
+    if request
+        .files
+        .values()
+        .any(|file| crate::path_safety::validate_remote_file_name(&file.file_name).is_err())
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
     // LocalSend represents a text message as exactly one small offered item
     // whose non-empty `preview` is the complete body. Mixed/multi-file offers
     // remain ordinary file transfers even if one item happens to have preview
