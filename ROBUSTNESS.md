@@ -364,8 +364,44 @@ This confirms local helper startup, not an official-client transfer or loading
 the changed QML inside the live shell.
 
 These are local automated tests using Rust peers, not official LocalSend
-interoperability or live Quickshell tests. The new manual folder scenario below
-remains **Not run** with official Android, iOS and desktop clients.
+interoperability or live Quickshell tests. At this initial stage the manual folder scenario was **Not run** with official
+clients; the subsequent iPhone session below supplies real transfer results.
+Android and desktop interoperability remain **Not run**.
+
+### Official iPhone folder session, 2026-10-13
+
+- Source: `d682a9c` on `feat/folder-transfer-hardened`, plugin
+  `1.2.6-dev`, local debug helper `1.2.5`; the changed QML is not installed.
+- Peer: the maintainer's iPhone advertised as `Patient Avocado`, protocol
+  `2.2`, HTTPS. The repo's prior session records iPhone 15 / iOS 27.0.1 /
+  LocalSend 1.18.2; those OS/application versions have not been rechecked
+  during this session.
+- Nearby → iPhone: **Pass at the protocol level**. The three-file
+  `Nearby-PR22-folder-test` offer was accepted, the helper uploaded
+  `a.txt`, `sub/b.txt`, `sub/deep/c.bin` in order (4,158 bytes total)
+  and emitted `outgoing_done` over fingerprint-pinned HTTPS.
+- iPhone hierarchy/content: **Pass by round-trip verification**. The maintainer
+  returned the received folder with the original nested wire paths.
+- iPhone → Nearby folder round trip: **Pass**. Approval produced
+  `incoming_accepted`, three `file_received` events at the expected relative
+  paths and `incoming_done`. All three sizes and SHA256 hashes exactly match
+  the original fixture; no `.part` remains.
+- Repeated Nearby → iPhone send: **Pass**. On request, the same three-file
+  fixture was sent again and emitted `outgoing_done`.
+- Incoming PIN and repeated-root collisions: **Pass**. The temporary receiver
+  enabled a PIN, and the official sender reached approval with it. The second
+  return offered six files (8,316 bytes), including the phone's renamed copies.
+  After explicit approval the helper completed all six files. Nine files
+  remain in the destination: the original three plus six new files. The
+  colliding originals became `a (1).txt`, `sub/b (1).txt` and
+  `sub/deep/c (1).bin`; every original and copy has the expected size and
+  SHA256, and no `.part` remains.
+- Decline, cancellation, wrong-PIN lockout and live QML: **Not run in this session**.
+
+The helper used temporary state, identity, fixture and download directories,
+without replacing the installed plugin or changing its PIN/identity files.
+It was shut down at the end. The installed receiver was left disabled in
+accordance with the maintainer's latest instruction.
 
 ## Manual interoperability matrix
 
