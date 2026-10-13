@@ -897,6 +897,11 @@ for (const busy of ["sending", "receiving", "pin"]) {
   state.handleEvent({event: "outgoing_progress", transferId: "tx-1", name: "second.txt", bytes: 10, total: 100})
   assert.equal(state.transferName, "second.txt")
   assert.equal(state.progress, 0.1)
+  state.handleEvent({event: "outgoing_progress", transferId: "old", name: "stale.txt", bytes: 90, total: 100})
+  assert.equal(state.transferName, "second.txt", "a late transfer must not change the active file name")
+  assert.equal(state.progress, 0.1)
+  state.handleEvent({event: "outgoing_progress", transferId: "tx-1", bytes: 20, total: 100})
+  assert.equal(state.transferName, "second.txt", "progress without a name retains the active file")
 }
 
 {

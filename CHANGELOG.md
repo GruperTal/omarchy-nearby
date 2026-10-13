@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.2.6-dev
+
+- Send folders with relative paths, sorted uploads and the active file name in
+  the panel. Explicitly selected directory links are resolved; links inside a
+  folder are skipped, and empty directories are not transferred.
+- Receive folder hierarchies without overwriting existing files, preserving
+  nested paths when adding collision suffixes. Existing directories are merged.
+- Reject unsafe offered paths before reserving a session or asking for approval,
+  after the incoming PIN gate. Paths allow at most 32 directory levels,
+  4096 UTF-8 bytes overall and 255 bytes per component; hidden components,
+  empty segments, traversal and Windows separators are refused.
+- Fail folder preparation on unreadable entries and unsupported file types,
+  bound transfers to 10,000 files and 2 MiB of serialized offer JSON, and allow
+  cancellation during directory scans.
+
 ## 1.2.5
 
 - Show the Nearby logo in the bar and in the panel header instead of a generic

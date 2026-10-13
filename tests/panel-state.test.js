@@ -115,7 +115,7 @@ assert.equal((source.match(/onHovered/g) || []).length,
 assert.doesNotMatch(source, /onHovered[^\n]*if\s*\(v\)\s*\{\s*root\.cursorActive=true/,
   "taking the cursor on enter without releasing it on leave is the bug this replaced")
 
-for (const launcher of ["picker", "clipboard", "clipboardWriter", "textCopier"]) {
+for (const launcher of ["picker", "folderPicker", "clipboard", "clipboardWriter", "textCopier"]) {
   assert.match(source, new RegExp(`onRunningChanged:\\s*if\\s*\\(!running && !${launcher}\\.launched`),
     `${launcher} must report a command that never launched, which Quickshell signals by ` +
     "returning running to false without an exit code")

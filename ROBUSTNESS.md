@@ -305,6 +305,48 @@ The downloaded executable independently matched the release checksum and
 source digest and tag on a GitHub-hosted runner, and `--version` reported
 `omarchy-nearby-helper 1.2.4`. Android interoperability remains **Not run**.
 
+### Folder transfer hardening development validation, 2026-10-13
+
+The PR #22's four original commits were rebased onto `main` at `758e319`,
+preserving Rizmi's authorship. The rebased feature baseline is `3d5f67e`;
+maintainer hardening is added on `feat/folder-transfer-hardened`. Development
+versions advance to plugin `1.2.6-dev` and helper/floor `1.2.5`. The committed
+`helper-release.env` deliberately still selects the verified 1.2.4 artifact.
+This development branch requires a local developer helper until a 1.2.5 helper
+is published through Actions, independently verified and selected by exact
+metadata. No helper or plugin release has been published by this validation.
+
+All three Node suites, both Bash distribution suites, Cargo formatting, locked
+check, Clippy with warnings denied, helper tests (92 unit plus the startup
+integration test) and the separate vendor HTTPS suite passed locally. The
+vendor suite retains its existing ignored test; an ignored test is not a pass.
+Formatting of the vendored crate and `git diff --check` also passed.
+
+New coverage includes:
+
+- Raw path spelling and UTF-8 byte/depth boundaries, validation of every
+  offered path before prompts/reservations, a valid retry after rejection, and
+  unchanged PIN-first authorization and lockout.
+- Missing directories and unreadable files/folders, invalid UTF-8, special
+  files, hidden names and cooperative scan cancellation.
+- Explicit top-level symlink naming and skipping links inside selected trees.
+- The 10,000-file limit for regular-file selections as well as folders; escaped
+  JSON counting during collection and the exact identity/offer envelope bound.
+- Full helper folder transfers over HTTP and pinned HTTPS, in sorted order,
+  with nested collision suffixes, exact saved bytes and omitted empty folders.
+- Existing and late-created parent symlinks refused over HTTP before disk
+  writes, and transfer-ID protection for the active outgoing file name.
+
+Three regressions were also run against the rebased feature before hardening:
+`unsafe_paths_are_rejected_before_reservation_or_prompt` failed because the
+invalid offer waited for approval; `rejects_unsafe_wire_spellings_without_normalizing`
+failed on `./file`; and a direct missing/unreadable-directory preparation check
+failed because traversal returned success. All three pass after hardening.
+
+These are local automated tests using Rust peers, not official LocalSend
+interoperability or live Quickshell tests. The new manual folder scenario below
+remains **Not run** with official Android, iOS and desktop clients.
+
 ## Manual interoperability matrix
 
 Run applicable transfer and PIN scenarios with both Android and iOS LocalSend
@@ -386,6 +428,16 @@ complete until those versions and results are written down.
     confirm that the PIN still applies. Never replace personal settings with
     a FIFO or delete them as a generic recovery step.
 
+22. With an official LocalSend client, send and receive a folder containing
+    several nested files and verify exact contents, paths, active file names,
+    progress and completion. Receive it again: directories merge and colliding
+    files receive suffixes inside their original parents. Verify PIN flows,
+    decline, cancel while awaiting approval, cancel during a large upload and
+    immediate retry. Repeat with the panel closed and, where available, on
+    multiple monitors. Check unreadable folders fail preparation, inner
+    symlinks are skipped and hidden components are refused. Record peer OS and
+    LocalSend version; Rust loopback tests do not count as this manual pass.
+
 ## Result record
 
 Copy this template for each validation session. Leave unexecuted cases marked
@@ -411,6 +463,7 @@ Copy this template for each validation session. Leave unexecuted cases marked
 | 17: multiple monitors | Omarchy | Not run | |
 | 20: desktop integration | Omarchy + peer | Not run | |
 | 21: unsafe settings and recovery | Isolated Omarchy installation | Not run | |
+| 22: folder transfers and lifecycle | Official Android / iOS / desktop client, separate rows | Not run | |
 
 For failures, identify the exact scenario and attach redacted logs or a
 reproduction. Split grouped rows whenever individual outcomes differ.

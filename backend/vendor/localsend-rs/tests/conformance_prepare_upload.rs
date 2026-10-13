@@ -190,3 +190,133 @@ async fn abandoned_pending_request_releases_the_receiver() {
     }
     assert_eq!(retry.await.unwrap(), 403);
 }
+
+/// Bad names are refused before a pending prompt and cannot leave the receiver
+/// busy. A good offer immediately afterwards must still reach approval.
+#[tokio::test]
+async fn unsafe_paths_are_rejected_before_reservation_or_prompt() {
+    use localsend_rs::server::ServerEvent;
+    use tokio::time::{Duration, timeout};
+    let save = tempfile::tempdir().unwrap();
+    let (server, mut events) = LocalSendServer::builder()
+        .alias("R")
+        .port(0)
+        .save_dir(save.path())
+        .protocol(Protocol::Http)
+        .auto_accept(false)
+        .build()
+        .await
+        .unwrap();
+    let port = server.port();
+    common::wait_for_http_info(port).await;
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{port}/api/localsend/v2/prepare-upload");
+    let offer = |name: &str| {
+        json!({
+            "info": { "alias": "raw", "version": "2.1", "fingerprint": "fp", "port": 53317,
+                      "protocol": "http", "download": false },
+            "files": { "f": { "id": "f", "fileName": name, "size": 1, "fileType": "x" } }
+        })
+    };
+    let mut names = vec![
+        ".config/autostart/app.desktop".to_string(),
+        "dir/.hidden".into(),
+        "dir/./file".into(),
+        "dir//file".into(),
+        "dir/../file".into(),
+        "/file".into(),
+        "C:\\file".into(),
+        "x:y".into(),
+        "x\0y".into(),
+        "dir/".into(),
+        "".into(),
+        format!("{}file", "d/".repeat(33)),
+        "é".repeat(128),
+        vec!["a".repeat(255); 17].join("/"),
+    ];
+    // A valid first entry must not conceal a later invalid path.
+    names.push(".hidden".into());
+    for name in names {
+        let mut body = offer(&name);
+        body["files"]["good"] =
+            json!({"id": "good", "fileName": "fine", "size": 1, "fileType": "x"});
+        let response = timeout(Duration::from_secs(2), client.post(&url).json(&body).send())
+            .await
+            .expect("unsafe offer must not wait for approval")
+            .unwrap();
+        assert_eq!(response.status(), 400, "{name:?}");
+        assert!(events.try_recv().is_err(), "unsafe offer emitted an event");
+    }
+    let request = client.post(&url).json(&offer("folder/sub/file")).send();
+    tokio::pin!(request);
+    let pending = tokio::select! {
+        event = timeout(Duration::from_secs(2), events.recv()) => match event.unwrap().unwrap() {
+            ServerEvent::TransferRequest(pending) => pending,
+            other => panic!("expected prompt, got {other:?}"),
+        },
+        result = &mut request => panic!("valid offer rejected before approval: {result:?}"),
+    };
+    assert!(pending.accept());
+    assert_eq!(request.await.unwrap().status(), 200);
+}
+
+#[tokio::test]
+async fn path_validation_preserves_the_pin_gate() {
+    let save = tempfile::tempdir().unwrap();
+    let (server, mut events) = LocalSendServer::builder()
+        .alias("R")
+        .port(0)
+        .save_dir(save.path())
+        .protocol(Protocol::Http)
+        .pin("safe")
+        .auto_accept(false)
+        .build()
+        .await
+        .unwrap();
+    let port = server.port();
+    common::wait_for_http_info(port).await;
+    let client = reqwest::Client::new();
+    let body = json!({
+        "info": { "alias": "raw", "version": "2.1", "fingerprint": "fp", "port": 53317,
+                  "protocol": "http", "download": false },
+        "files": { "f": { "id": "f", "fileName": ".hidden", "size": 1, "fileType": "x" } }
+    });
+    let url = format!("http://127.0.0.1:{port}/api/localsend/v2/prepare-upload");
+    assert_eq!(
+        client.post(&url).json(&body).send().await.unwrap().status(),
+        401
+    );
+    assert_eq!(
+        client
+            .post(format!("{url}?pin=safe"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    for _ in 0..3 {
+        assert_eq!(
+            client
+                .post(format!("{url}?pin=wrong"))
+                .json(&body)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
+    }
+    assert_eq!(
+        client
+            .post(format!("{url}?pin=safe"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        429
+    );
+    assert!(events.try_recv().is_err());
+}

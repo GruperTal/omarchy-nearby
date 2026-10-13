@@ -51,6 +51,22 @@ arrive within 30 seconds, and an upload may pause for at most 120 seconds; an
 accept decision and file validation do not count against these limits. Shared state helpers in [Model.js](../Model.js) must
 remain usable by both QML and Node tests.
 
+## Folder transfer preparation
+
+The helper walks selected trees on the blocking pool, checking cancellation
+between entries. It preserves strict read failures and skips only symlinks
+inside the tree. Explicit top-level symlinks are resolved once. File count and
+serialized JSON accounting bound metadata accumulation during the walk; a final
+serialization counter includes the exact identity and offer envelope before
+prepare-upload. No archive or new runtime dependency is needed.
+
+The vendor exposes one wire-name validator and path limits through `core` for
+the helper and receiver to share. The receiver applies it after the PIN gate
+and before reservation or events, then checks existing path symlinks before
+creating directories and again before atomic file publication. Folder support
+retains the existing size checks, upload reservations, random partial names,
+cancellation marker, timeouts and progress rollback.
+
 ## Discovery model
 
 Nearby starts with passive discovery and escalates to broader probes:

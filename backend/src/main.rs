@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use localsend_rs::LocalSendServer;
 use localsend_rs::client::{LocalSendClient, ProgressCallback, TlsTrustPolicy};
-use localsend_rs::core::build_file_metadata;
+use localsend_rs::core::{MAX_REMOTE_DIRECTORY_DEPTH, validate_remote_file_name};
 use localsend_rs::crypto::TlsCertificate;
 use localsend_rs::discovery::{Discovery, HttpDiscovery, MulticastDiscovery};
 use localsend_rs::error::LocalSendError;
@@ -14,8 +14,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::io::{self, Write};
 use std::net::Ipv4Addr;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
@@ -223,8 +225,24 @@ fn human_error(error: &anyhow::Error) -> &'static str {
         return "Too many incorrect PIN attempts";
     }
     let text = format!("{error:#}").to_lowercase();
-    if text.contains("permission") {
+    if text.contains("offer exceeds 2 mib") {
+        "Too many files or long names: transfer offer exceeds 2 MiB"
+    } else if text.contains("10,000 files") {
+        "Transfer exceeds 10,000 files"
+    } else if text.contains("32 levels") {
+        "Folder exceeds 32 directory levels"
+    } else if text.contains("unsafe remote file name") {
+        "Unsupported file path: hidden components, unsafe names or path too long"
+    } else if text.contains("not valid utf-8") || text.contains("no valid utf-8 name") {
+        "File name is not valid UTF-8"
+    } else if text.contains("no transferable files") {
+        "Selected folders contain no transferable files"
+    } else if text.contains("unsupported entry") {
+        "Selected folder contains an unsupported entry"
+    } else if text.contains("permission") {
         "Permission denied"
+    } else if text.contains("cannot read") || text.contains("cannot inspect") {
+        "Could not read every selected file or folder"
     } else if text.contains("address already in use") || text.contains("addrinuse") {
         "Port 53317 is already in use"
     } else if text.contains("refused") || text.contains("unreachable") {
@@ -717,75 +735,169 @@ async fn start_active_discovery(
     }
 }
 
-const MAX_TRANSFER_DEPTH: usize = 32;
 const MAX_TRANSFER_FILES: usize = 10_000;
+const MAX_PREPARE_BODY_BYTES: usize = 2 * 1024 * 1024;
+
+// Count the actual escaped JSON without allocating an oversized body.
+#[derive(Default)]
+struct OfferSize(usize);
+
+impl Write for OfferSize {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let total = self
+            .0
+            .checked_add(bytes.len())
+            .filter(|n| *n <= MAX_PREPARE_BODY_BYTES)
+            .ok_or_else(|| io::Error::other("Transfer offer exceeds 2 MiB limit"))?;
+        self.0 = total;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn check_offer_size(identity: &DeviceInfo, files: &HashMap<FileId, FileMetadata>) -> Result<()> {
+    #[derive(serde::Serialize)]
+    struct Offer<'a> {
+        info: &'a DeviceInfo,
+        files: &'a HashMap<FileId, FileMetadata>,
+    }
+    serde_json::to_writer(
+        OfferSize::default(),
+        &Offer {
+            info: identity,
+            files,
+        },
+    )?;
+    Ok(())
+}
+
+// Dropping a cancelled async preparation also tells its blocking walker to
+// stop. Dropping a spawn_blocking JoinHandle alone does not stop that work.
+struct ScanCancellation(Arc<AtomicBool>);
+impl Drop for ScanCancellation {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
+#[derive(Default)]
+struct OutgoingFiles {
+    sources: HashMap<String, PathBuf>,
+    metadata: HashMap<FileId, FileMetadata>,
+    offer_size: OfferSize,
+}
+
+impl OutgoingFiles {
+    fn add_file(&mut self, path: PathBuf, name: String) -> Result<()> {
+        validate_remote_file_name(&name)?;
+        if self.metadata.len() >= MAX_TRANSFER_FILES {
+            return Err(anyhow!("Transfer exceeds maximum limit of 10,000 files"));
+        }
+        // Check readability now and never block on a raced-in FIFO or follow a
+        // raced-in leaf symlink. Upload still streams the file without caching it.
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&path)
+            .with_context(|| format!("Cannot read selected file {}", path.display()))?;
+        let file_meta = file.metadata()?;
+        if !file_meta.is_file() {
+            return Err(anyhow!("Selected entry is not a regular file"));
+        }
+        let id = FileId::new();
+        let meta = FileMetadata {
+            id: id.clone(),
+            file_name: name,
+            size: file_meta.len(),
+            file_type: localsend_rs::core::file::get_mime_type(&path),
+            sha256: None,
+            preview: None,
+            metadata: None,
+        };
+        // Include keys, punctuation and escaping. This bounds accumulation
+        // during traversal; check_offer_size includes the identity/envelope.
+        if !self.metadata.is_empty() {
+            self.offer_size.write_all(b",")?;
+        }
+        serde_json::to_writer(&mut self.offer_size, &id)?;
+        self.offer_size.write_all(b":")?;
+        serde_json::to_writer(&mut self.offer_size, &meta)?;
+        self.sources.insert(id.as_str().to_string(), path);
+        self.metadata.insert(id, meta);
+        Ok(())
+    }
+}
 
 fn collect_directory_files(
     current: &Path,
     prefix: &str,
     depth: usize,
-    sources: &mut HashMap<String, PathBuf>,
-    metadata: &mut HashMap<FileId, FileMetadata>,
+    files: &mut OutgoingFiles,
+    cancelled: &AtomicBool,
 ) -> Result<()> {
-    if depth > MAX_TRANSFER_DEPTH {
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(anyhow!("Directory scan cancelled"));
+    }
+    if depth > MAX_REMOTE_DIRECTORY_DEPTH {
         return Err(anyhow!("Folder depth exceeds limit of 32 levels"));
     }
-    if metadata.len() >= MAX_TRANSFER_FILES {
-        return Err(anyhow!("Transfer exceeds maximum limit of 10,000 files"));
-    }
-    let entries = match std::fs::read_dir(current) {
-        Ok(e) => e,
-        Err(_) => return Ok(()),
-    };
-    for entry_res in entries {
-        let entry = match entry_res {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let file_type = match entry.file_type() {
-            Ok(ft) => ft,
-            Err(_) => continue,
-        };
-        // Skip symlinks to prevent loops and escaping the directory tree
+    validate_remote_file_name(&format!("{prefix}/x"))?;
+    for entry in std::fs::read_dir(current)
+        .with_context(|| format!("Cannot read selected folder {}", current.display()))?
+    {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(anyhow!("Directory scan cancelled"));
+        }
+        let entry = entry.context("Cannot read folder entry")?;
+        let file_type = entry.file_type().context("Cannot inspect folder entry")?;
+        // Deliberately skip links inside a selected tree; never follow them.
         if file_type.is_symlink() {
             continue;
         }
         let file_name = entry.file_name();
-        let file_name_str = file_name.to_string_lossy();
-        let relative_name = if prefix.is_empty() {
-            file_name_str.to_string()
-        } else {
-            format!("{prefix}/{file_name_str}")
-        };
-
+        let file_name = file_name.to_str().context("File name is not valid UTF-8")?;
+        let relative_name = format!("{prefix}/{file_name}");
         if file_type.is_dir() {
-            collect_directory_files(&entry.path(), &relative_name, depth + 1, sources, metadata)?;
+            collect_directory_files(&entry.path(), &relative_name, depth + 1, files, cancelled)?;
         } else if file_type.is_file() {
-            if metadata.len() >= MAX_TRANSFER_FILES {
-                return Err(anyhow!(
-                    "Transfer exceeds maximum file limit (10,000 files)"
-                ));
-            }
-            let path = entry.path();
-            let file_meta = match std::fs::metadata(&path) {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-            let id = FileId::new();
-            let meta = FileMetadata {
-                id: id.clone(),
-                file_name: relative_name,
-                size: file_meta.len(),
-                file_type: localsend_rs::core::file::get_mime_type(&path),
-                sha256: None,
-                preview: None,
-                metadata: None,
-            };
-            sources.insert(id.as_str().to_string(), path);
-            metadata.insert(id, meta);
+            files.add_file(entry.path(), relative_name)?;
+        } else {
+            return Err(anyhow!("Selected folder contains an unsupported entry"));
         }
     }
     Ok(())
+}
+
+fn collect_outgoing_files(paths: Vec<String>, cancelled: &AtomicBool) -> Result<OutgoingFiles> {
+    let mut files = OutgoingFiles::default();
+    for raw in paths {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(anyhow!("Directory scan cancelled"));
+        }
+        let selected = PathBuf::from(raw);
+        // Explicit top-level links are resolved once; links encountered while
+        // traversing the selected tree are skipped by collect_directory_files.
+        let path = std::fs::canonicalize(&selected).context("Selected path is unavailable")?;
+        let meta = std::fs::symlink_metadata(&path)?;
+        let name = selected
+            .file_name()
+            .and_then(|s| s.to_str())
+            .context("Selected path has no valid UTF-8 name")?;
+        if meta.is_dir() {
+            collect_directory_files(&path, name, 1, &mut files, cancelled)?;
+        } else if meta.is_file() {
+            files.add_file(path, name.to_string())?;
+        } else {
+            return Err(anyhow!("Selected entry is not a regular file or folder"));
+        }
+    }
+    if files.metadata.is_empty() {
+        return Err(anyhow!("No transferable files selected"));
+    }
+    Ok(files)
 }
 
 // Identity, target, payload, authorization and cancellation are independent
@@ -811,14 +923,20 @@ async fn send_payload(
     // a `certificate required` alert before the first request is answered.
     let client = if target.protocol == Protocol::Https {
         LocalSendClient::with_trust_policy_and_identity(
-            identity,
+            identity.clone(),
             TlsTrustPolicy::new([target.fingerprint.clone()]),
             &certificate,
         )?
     } else {
-        LocalSendClient::new(identity)
+        LocalSendClient::new(identity.clone())
     };
-    let _ = client.register(&target).await;
+    tokio::select! {
+        _ = client.register(&target) => {},
+        _ = &mut cancel_rx => {
+            emit(json!({"event":"outgoing_cancelled","transferId":transfer_id}));
+            return Ok(SendPayloadOutcome::Finished);
+        }
+    }
     let mut metadata = HashMap::new();
     let mut sources: HashMap<String, PathBuf> = HashMap::new();
     let mut text_source = None;
@@ -847,69 +965,24 @@ async fn send_payload(
         if paths.is_empty() {
             return Err(anyhow!("no files selected"));
         }
-        for raw in paths {
-            let path = PathBuf::from(raw);
-            let sym_meta = match std::fs::symlink_metadata(&path) {
-                Ok(m) => m,
-                Err(_) => return Err(anyhow!("file is unavailable")),
-            };
-            if sym_meta.file_type().is_symlink() {
-                let real_path =
-                    std::fs::canonicalize(&path).map_err(|_| anyhow!("file is unavailable"))?;
-                let real_meta =
-                    std::fs::metadata(&real_path).map_err(|_| anyhow!("file is unavailable"))?;
-                if real_meta.is_dir() {
-                    let folder_name = path
-                        .file_name()
-                        .unwrap_or_else(|| real_path.file_name().unwrap_or_default())
-                        .to_string_lossy()
-                        .to_string();
-                    let mut s = sources;
-                    let mut m = metadata;
-                    (s, m) = tokio::task::spawn_blocking(move || {
-                        collect_directory_files(&real_path, &folder_name, 1, &mut s, &mut m)?;
-                        Ok::<_, anyhow::Error>((s, m))
-                    })
-                    .await
-                    .map_err(|e| anyhow!("directory scan failed: {e}"))??;
-                    sources = s;
-                    metadata = m;
-                } else if real_meta.is_file() {
-                    let meta = build_file_metadata(&real_path).await?;
-                    sources.insert(meta.id.as_str().to_string(), real_path);
-                    metadata.insert(meta.id.clone(), meta);
-                } else {
-                    return Err(anyhow!("file is unavailable"));
-                }
-            } else if sym_meta.is_dir() {
-                let folder_name = path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                let mut s = sources;
-                let mut m = metadata;
-                (s, m) = tokio::task::spawn_blocking(move || {
-                    collect_directory_files(&path, &folder_name, 1, &mut s, &mut m)?;
-                    Ok::<_, anyhow::Error>((s, m))
-                })
-                .await
-                .map_err(|e| anyhow!("directory scan failed: {e}"))??;
-                sources = s;
-                metadata = m;
-            } else if sym_meta.is_file() {
-                let meta = build_file_metadata(&path).await?;
-                sources.insert(meta.id.as_str().to_string(), path);
-                metadata.insert(meta.id.clone(), meta);
-            } else {
-                return Err(anyhow!("file is unavailable"));
+        let cancellation = ScanCancellation(Arc::new(AtomicBool::new(false)));
+        let cancelled = cancellation.0.clone();
+        let scan = tokio::task::spawn_blocking(move || collect_outgoing_files(paths, &cancelled));
+        let files = tokio::select! {
+            result = scan => result.context("Directory scan failed")??,
+            _ = &mut cancel_rx => {
+                emit(json!({"event":"outgoing_cancelled","transferId":transfer_id}));
+                return Ok(SendPayloadOutcome::Finished);
             }
-        }
-        if metadata.is_empty() {
-            return Err(anyhow!("no files selected"));
-        }
+        };
+        sources = files.sources;
+        metadata = files.metadata;
     }
-    let total: u64 = metadata.values().map(|f| f.size).sum();
+    check_offer_size(&identity, &metadata)?;
+    let total = metadata
+        .values()
+        .try_fold(0u64, |total, file| total.checked_add(file.size))
+        .ok_or_else(|| anyhow!("Transfer total size overflow"))?;
     let summary = metadata
         .values()
         .next()
@@ -1677,6 +1750,244 @@ mod tests {
         assert!(!is_nearby_partial_name("notes.part"));
     }
 
+    #[tokio::test]
+    async fn folders_transfer_over_http_and_pinned_https_with_nested_collisions() {
+        for protocol in [Protocol::Http, Protocol::Https] {
+            let dir = folder_test_dir();
+            let source = dir.join("chosen");
+            let save = dir.join("received");
+            std::fs::create_dir_all(source.join("sub")).unwrap();
+            std::fs::create_dir(source.join("empty")).unwrap();
+            std::fs::create_dir(&save).unwrap();
+            std::fs::write(source.join("z.txt"), b"z").unwrap();
+            std::fs::write(source.join("sub/b.txt"), b"bb").unwrap();
+            std::fs::write(source.join("a.txt"), b"aaa").unwrap();
+            let receiver_certificate = generate_tls_certificate().unwrap();
+            let (mut server, mut events) = LocalSendServer::builder()
+                .alias("Receiver")
+                .port(0)
+                .save_dir(&save)
+                .protocol(protocol)
+                .tls_certificate(receiver_certificate.clone())
+                .pin("safe")
+                .auto_accept(true)
+                .build()
+                .await
+                .unwrap();
+            let mut target = server.device().clone();
+            target.ip = Some("127.0.0.1".into());
+            target.fingerprint = receiver_certificate.fingerprint;
+            for round in 0..2 {
+                let (cancel_tx, cancel_rx) = oneshot::channel();
+                let outcome = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    send_payload(
+                        format!("folder-{round}"),
+                        DeviceInfo::new("Sender".into(), 53317, protocol),
+                        generate_tls_certificate().unwrap(),
+                        target.clone(),
+                        vec![source.to_str().unwrap().into()],
+                        None,
+                        Some("safe".into()),
+                        cancel_rx,
+                    ),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                assert_eq!(outcome, SendPayloadOutcome::Finished);
+                drop(cancel_tx);
+                let mut names = Vec::new();
+                loop {
+                    match tokio::time::timeout(Duration::from_secs(2), events.recv())
+                        .await
+                        .unwrap()
+                        .unwrap()
+                    {
+                        ServerEvent::FileReceived { path, .. } => names.push(
+                            path.strip_prefix(&save)
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .to_string(),
+                        ),
+                        ServerEvent::SessionCompleted { .. } => break,
+                        _ => {}
+                    }
+                }
+                let expected = if round == 0 {
+                    ["chosen/a.txt", "chosen/sub/b.txt", "chosen/z.txt"]
+                } else {
+                    [
+                        "chosen/a (1).txt",
+                        "chosen/sub/b (1).txt",
+                        "chosen/z (1).txt",
+                    ]
+                };
+                assert_eq!(names, expected);
+            }
+            assert_eq!(std::fs::read(save.join("chosen/sub/b.txt")).unwrap(), b"bb");
+            assert_eq!(
+                std::fs::read(save.join("chosen/sub/b (1).txt")).unwrap(),
+                b"bb"
+            );
+            assert!(!save.join("chosen/empty").exists());
+            assert!(std::fs::read_dir(&save).unwrap().all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".part")
+            }));
+            server.stop();
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    fn folder_test_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("nearby-folder-tests-{}", FileId::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn directory_scan_fails_on_unreadable_folders_and_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = folder_test_dir();
+        let missing = dir.join("missing");
+        let mut files = OutgoingFiles::default();
+        let cancelled = AtomicBool::new(false);
+        assert!(collect_directory_files(&missing, "folder", 1, &mut files, &cancelled).is_err());
+        let sub = dir.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let result = collect_directory_files(&dir, "folder", 1, &mut files, &cancelled);
+        std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            result.is_err(),
+            "an unreadable folder must not silently disappear"
+        );
+        let file = dir.join("secret");
+        std::fs::write(&file, b"secret").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let result = collect_directory_files(&dir, "folder", 1, &mut files, &cancelled);
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(
+            result.is_err(),
+            "unreadable files must fail during preparation"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn directory_scan_rejects_hidden_names_non_utf8_and_special_files() {
+        use std::os::unix::ffi::OsStringExt;
+        let dir = folder_test_dir();
+        for name in [
+            std::ffi::OsString::from(".hidden"),
+            std::ffi::OsString::from_vec(vec![0xff]),
+        ] {
+            let path = dir.join(name);
+            std::fs::write(&path, b"data").unwrap();
+            assert!(
+                collect_outgoing_files(vec![dir.to_str().unwrap().into()], &AtomicBool::new(false))
+                    .is_err()
+            );
+            std::fs::remove_file(path).unwrap();
+        }
+        let fifo = dir.join("fifo");
+        let raw = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
+        assert!(
+            collect_outgoing_files(vec![dir.to_str().unwrap().into()], &AtomicBool::new(false))
+                .is_err()
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn directory_scan_obeys_depth_and_cancellation() {
+        let dir = folder_test_dir();
+        let mut files = OutgoingFiles::default();
+        let cancelled = AtomicBool::new(false);
+        assert!(collect_directory_files(&dir, "folder", 33, &mut files, &cancelled).is_err());
+        cancelled.store(true, Ordering::Relaxed);
+        assert!(collect_directory_files(&dir, "folder", 1, &mut files, &cancelled).is_err());
+        let flag = Arc::new(AtomicBool::new(false));
+        drop(ScanCancellation(flag.clone()));
+        assert!(flag.load(Ordering::Relaxed));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn explicit_top_level_directory_link_keeps_its_selected_name() {
+        let dir = folder_test_dir();
+        let real = dir.join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::write(real.join("a"), b"x").unwrap();
+        let link = dir.join("chosen");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let files =
+            collect_outgoing_files(vec![link.to_str().unwrap().into()], &AtomicBool::new(false))
+                .unwrap();
+        assert_eq!(
+            files.metadata.values().next().unwrap().file_name,
+            "chosen/a"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn accumulation_stops_at_the_serialized_offer_budget() {
+        let dir = folder_test_dir();
+        let path = dir.join("a");
+        std::fs::write(&path, b"x").unwrap();
+        let mut files = OutgoingFiles::default();
+        // Quotes expand in JSON, so a budget based on path length alone would
+        // permit an offer that the receiver's body limit rejects.
+        let name = "\"".repeat(250);
+        let mut rejected = false;
+        for _ in 0..MAX_TRANSFER_FILES {
+            if files.add_file(path.clone(), name.clone()).is_err() {
+                rejected = true;
+                break;
+            }
+        }
+        assert!(rejected);
+        assert!(files.metadata.len() < MAX_TRANSFER_FILES);
+        assert!(files.offer_size.0 <= MAX_PREPARE_BODY_BYTES);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn file_count_limit_applies_to_regular_files_too() {
+        let dir = folder_test_dir();
+        let path = dir.join("a");
+        std::fs::write(&path, b"x").unwrap();
+        let mut files = OutgoingFiles::default();
+        for _ in 0..MAX_TRANSFER_FILES {
+            files.add_file(path.clone(), "a".into()).unwrap();
+        }
+        assert!(files.add_file(path, "a".into()).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn offer_budget_counts_json_escaping_and_the_identity_envelope() {
+        let mut writer = OfferSize::default();
+        writer
+            .write_all(&vec![b'x'; MAX_PREPARE_BODY_BYTES])
+            .unwrap();
+        assert!(writer.write_all(b"x").is_err());
+        assert_eq!(writer.0, MAX_PREPARE_BODY_BYTES);
+        let mut writer = OfferSize::default();
+        assert!(serde_json::to_writer(&mut writer, &"\0".repeat(MAX_TEXT_BYTES)).is_err());
+        assert!(writer.0 <= MAX_PREPARE_BODY_BYTES);
+        let mut identity = DeviceInfo::new("Sender".into(), 53317, Protocol::Http);
+        identity.alias = "x".repeat(MAX_PREPARE_BODY_BYTES);
+        assert!(check_offer_size(&identity, &HashMap::new()).is_err());
+    }
+
     #[test]
     fn collect_directory_files_recursively_gathers_files() {
         let dir = std::env::temp_dir().join(format!(
@@ -1690,13 +2001,16 @@ mod tests {
         std::fs::write(sub.join("sub.txt"), b"sub").unwrap();
         std::fs::write(deep.join("deep.txt"), b"deep").unwrap();
 
-        let mut sources = HashMap::new();
-        let mut metadata = HashMap::new();
-        collect_directory_files(&dir, "my_folder", 1, &mut sources, &mut metadata).unwrap();
+        let mut files = OutgoingFiles::default();
+        collect_directory_files(&dir, "my_folder", 1, &mut files, &AtomicBool::new(false)).unwrap();
 
-        assert_eq!(metadata.len(), 3);
-        assert_eq!(sources.len(), 3);
-        let names: Vec<String> = metadata.values().map(|m| m.file_name.clone()).collect();
+        assert_eq!(files.metadata.len(), 3);
+        assert_eq!(files.sources.len(), 3);
+        let names: Vec<String> = files
+            .metadata
+            .values()
+            .map(|m| m.file_name.clone())
+            .collect();
         assert!(names.contains(&"my_folder/root.txt".to_string()));
         assert!(names.contains(&"my_folder/sub/sub.txt".to_string()));
         assert!(names.contains(&"my_folder/sub/deep/deep.txt".to_string()));
@@ -1721,13 +2035,12 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&outside, dir.join("link_dir")).unwrap();
 
-        let mut sources = HashMap::new();
-        let mut metadata = HashMap::new();
-        collect_directory_files(&dir, "folder", 1, &mut sources, &mut metadata).unwrap();
+        let mut files = OutgoingFiles::default();
+        collect_directory_files(&dir, "folder", 1, &mut files, &AtomicBool::new(false)).unwrap();
 
-        assert_eq!(metadata.len(), 1);
+        assert_eq!(files.metadata.len(), 1);
         assert_eq!(
-            metadata.values().next().unwrap().file_name,
+            files.metadata.values().next().unwrap().file_name,
             "folder/real.txt"
         );
 

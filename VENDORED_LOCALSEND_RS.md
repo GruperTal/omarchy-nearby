@@ -487,6 +487,31 @@ numeric collision suffixes (`file (1).ext`) preserve parent directory structure
 instead of flattening into the root save directory.
 
 
+The folder patch now also exports `validate_remote_file_name` and the path
+limits through `core`. It checks the raw spelling before filesystem
+normalization, with at most 32 directory levels, 4096 UTF-8 bytes overall and
+255 bytes per component. Empty segments, hidden components and `.` are refused
+as well as the existing traversal, absolute-path, NUL, backslash and colon
+checks. Unexpected filesystem inspection errors fail rather than being ignored.
+
+`src/server/handlers.rs` validates every offered path after the PIN gate and
+10,000-file check, but before reserving a session or emitting a prompt. Invalid
+names receive `400`. Existing symlink checks remain at upload and commit time.
+The upload byte bound, reservation, random partial filename, cancellation and
+flush behavior from entries 7–15 are unchanged. These pathname checks cannot
+exclude races with a local process able to modify the Downloads tree; private
+state hardening does not apply to received-file publication.
+
+Tests cover raw hidden/dot/empty components, byte/depth boundaries, prompt and
+reservation suppression with a valid retry, PIN ordering, and existing or
+late-created symlink parents over HTTP. Helper integration tests exercise
+ordered folder uploads and nested collisions over HTTP and pinned HTTPS.
+The helper owns traversal, cancellation, file-count and outbound JSON budgets;
+these are consumer behavior, not additional vendor patches. Empty directories
+are omitted and existing directory names merge. This deliberately refuses
+hidden files and paths beyond Nearby's limits even from official clients.
+Upstream status: not submitted or checked against a newer upstream revision.
+
 ## Nearby behavior outside the vendor
 
 The LocalSend 1.18 client-certificate compatibility hotfix is not one of the

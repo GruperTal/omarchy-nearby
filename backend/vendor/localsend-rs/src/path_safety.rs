@@ -1,48 +1,32 @@
 use crate::error::{LocalSendError, Result};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
-pub(crate) fn safe_join(base: &Path, remote_name: &str) -> Result<PathBuf> {
+/// Bounds for slash-separated LocalSend file names, measured in UTF-8 bytes.
+pub const MAX_REMOTE_PATH_BYTES: usize = 4096;
+pub const MAX_REMOTE_COMPONENT_BYTES: usize = 255;
+pub const MAX_REMOTE_DIRECTORY_DEPTH: usize = 32;
+
+/// Validate the wire spelling before Path::components can normalize away `.`
+/// or empty segments. Apply the same rules on send and before receive approval.
+pub fn validate_remote_file_name(remote_name: &str) -> Result<()> {
     if remote_name.is_empty()
+        || remote_name.len() > MAX_REMOTE_PATH_BYTES
         || remote_name.contains('\0')
         || remote_name.contains('\\')
         || remote_name.contains(':')
+        || remote_name.split('/').count() > MAX_REMOTE_DIRECTORY_DEPTH + 1
+        || remote_name.split('/').any(|part| {
+            part.is_empty() || part.starts_with('.') || part.len() > MAX_REMOTE_COMPONENT_BYTES
+        })
     {
-        return Err(LocalSendError::invalid_file(format!(
-            "Unsafe remote file name: {}",
-            remote_name
-        )));
+        return Err(LocalSendError::invalid_file("Unsafe remote file name"));
     }
+    Ok(())
+}
 
-    let remote_path = Path::new(remote_name);
-    if remote_path.is_absolute() {
-        return Err(LocalSendError::invalid_file(format!(
-            "Unsafe absolute remote file name: {}",
-            remote_name
-        )));
-    }
-
-    let mut relative = PathBuf::new();
-    for component in remote_path.components() {
-        match component {
-            Component::Normal(part) => {
-                relative.push(part);
-            }
-            Component::CurDir => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(LocalSendError::invalid_file(format!(
-                    "Unsafe remote file name: {}",
-                    remote_name
-                )));
-            }
-        }
-    }
-
-    if relative.as_os_str().is_empty() {
-        return Err(LocalSendError::invalid_file(format!(
-            "Unsafe empty remote file name: {}",
-            remote_name
-        )));
-    }
+pub(crate) fn safe_join(base: &Path, remote_name: &str) -> Result<PathBuf> {
+    validate_remote_file_name(remote_name)?;
+    let relative = Path::new(remote_name);
 
     // Remote file names may carry relative directory components for folder
     // transfers. Ensure no component inside base is an existing symlink to
@@ -50,13 +34,15 @@ pub(crate) fn safe_join(base: &Path, remote_name: &str) -> Result<PathBuf> {
     let mut check_path = base.to_path_buf();
     for part in relative.components() {
         check_path.push(part);
-        if let Ok(meta) = std::fs::symlink_metadata(&check_path) {
-            if meta.file_type().is_symlink() {
-                return Err(LocalSendError::invalid_file(format!(
-                    "Unsafe symlink in remote path: {}",
-                    remote_name
-                )));
+        match std::fs::symlink_metadata(&check_path) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(LocalSendError::invalid_file(
+                    "Unsafe symlink in remote path",
+                ));
             }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
         }
     }
 
@@ -67,6 +53,45 @@ pub(crate) fn safe_join(base: &Path, remote_name: &str) -> Result<PathBuf> {
 mod tests {
     use super::safe_join;
     use std::path::Path;
+
+    #[test]
+    fn rejects_unsafe_wire_spellings_without_normalizing() {
+        for name in [
+            "",
+            ".",
+            "..",
+            "./file",
+            "folder/./file",
+            "folder//file",
+            "folder/",
+            ".config/autostart/app.desktop",
+            "folder/.hidden",
+            "folder/../file",
+            "/absolute",
+            "x\\y",
+            "x:y",
+            "x\0y",
+        ] {
+            assert!(
+                safe_join(Path::new("/tmp/localsend"), name).is_err(),
+                "{name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bounds_wire_paths_in_utf8_bytes_and_directory_depth() {
+        use super::{MAX_REMOTE_PATH_BYTES, validate_remote_file_name};
+        let at_depth = format!("{}file", "d/".repeat(32));
+        assert!(validate_remote_file_name(&at_depth).is_ok());
+        assert!(validate_remote_file_name(&format!("d/{at_depth}")).is_err());
+        assert!(validate_remote_file_name(&"é".repeat(127)).is_ok());
+        assert!(validate_remote_file_name(&"é".repeat(128)).is_err());
+        let long = vec!["a".repeat(255); 16].join("/");
+        assert_eq!(long.len(), MAX_REMOTE_PATH_BYTES - 1);
+        assert!(validate_remote_file_name(&long).is_ok());
+        assert!(validate_remote_file_name(&format!("{long}/a")).is_err());
+    }
 
     #[test]
     fn allows_safe_nested_relative_paths() {

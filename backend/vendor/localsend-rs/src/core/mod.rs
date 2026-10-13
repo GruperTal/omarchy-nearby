@@ -3,6 +3,10 @@ pub mod device;
 pub mod file;
 pub mod session;
 
+pub use crate::path_safety::{
+    MAX_REMOTE_COMPONENT_BYTES, MAX_REMOTE_DIRECTORY_DEPTH, MAX_REMOTE_PATH_BYTES,
+    validate_remote_file_name,
+};
 pub use builders::DeviceInfoBuilder;
 pub use device::{get_device_model, get_device_type, get_local_ip};
 pub use file::{
