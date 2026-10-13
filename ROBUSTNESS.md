@@ -421,6 +421,33 @@ review of a popup on the real bar or an interactive file-chooser test. Those
 manual UI actions remain **Not run**. The official iPhone transfers above
 used the real helper separately from this QML harness.
 
+### Rustls handshake boundary security update, 2026-10-13
+
+GitHub's runtime dependency alert identified rustls 0.23.43 in the helper
+lockfile and 0.23.36 in the standalone vendor lockfile as affected by
+[GHSA-2mjx-qc3c-rqvc](https://github.com/rustls/rustls/security/advisories/GHSA-2mjx-qc3c-rqvc).
+The manifests now require rustls 0.23.45 and both locked dependency trees resolve
+exactly that version for the client, server and helper. Required transitive
+updates are recorded in vendor maintenance entry 17.
+
+The helper package and minimum helper floor advance to `1.2.6`; the plugin
+remains `1.2.6-dev` until release preparation. The already published
+`helper-v1.2.5` tag is unchanged. A new independently built and verified
+`helper-v1.2.6` is required before the stable plugin can select this fix.
+
+All three Node suites, both distribution Bash suites, Cargo formatting, locked
+check, Clippy with warnings denied, the 92 helper unit tests plus startup
+integration test, and all 151 vendor tests passed locally (one existing vendor
+test remains ignored). The helper's folder transfer regression exercises both
+HTTP and pinned HTTPS with nested collisions, and its client-authentication
+test requires the persistent sender identity. The vendor suite retains
+fingerprint rejection coverage. No new local exploit reproduction was added;
+the handshake boundary correction comes from the upstream rustls patch.
+
+Official iPhone round trips were tested with the preceding helper source as
+recorded above; that manual session has not yet been repeated with rustls
+0.23.45.
+
 ## Manual interoperability matrix
 
 Run applicable transfer and PIN scenarios with both Android and iOS LocalSend

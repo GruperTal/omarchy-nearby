@@ -2,6 +2,9 @@
 
 ## 1.2.6-dev
 
+- Require rustls 0.23.45 to reject TLS 1.3 handshake messages crossing
+  encryption-level boundaries (GHSA-2mjx-qc3c-rqvc).
+
 - Send folders with relative paths, sorted uploads and the active file name in
   the panel. Explicitly selected directory links are resolved; links inside a
   folder are skipped, and empty directories are not transferred.
