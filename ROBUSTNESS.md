@@ -403,6 +403,24 @@ without replacing the installed plugin or changing its PIN/identity files.
 It was shut down at the end. The installed receiver was left disabled in
 accordance with the maintainer's latest instruction.
 
+### Quickshell QML smoke, 2026-10-13
+
+Source `1a98a45` was loaded in an isolated Quickshell 0.3.2 configuration
+against the workstation's real Omarchy `Ui` and `Commons` components. The
+harness instantiated `Service.qml` and `Panel.qml`, including the eager popup
+content and the **Send folder** button. It verified that a disabled receiver
+stays stopped, the helper floor is `1.2.5`, selection switches the live panel
+to the target view, keyboard navigation stops at the fourth action, outgoing
+file-name/progress bindings update, and a stale transfer event cannot replace
+them. The final run loaded without warnings or errors and emitted
+`QML_SMOKE_PASS`. The installed shell/plugin and receiver setting were not
+changed by this check.
+
+This is an actual QML runtime smoke with a small host fixture, not a visual
+review of a popup on the real bar or an interactive file-chooser test. Those
+manual UI actions remain **Not run**. The official iPhone transfers above
+used the real helper separately from this QML harness.
+
 ## Manual interoperability matrix
 
 Run applicable transfer and PIN scenarios with both Android and iOS LocalSend
