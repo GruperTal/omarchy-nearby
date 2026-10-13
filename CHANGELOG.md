@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.6-dev
+## 1.2.6
 
 - Require rustls 0.23.45 to reject TLS 1.3 handshake messages crossing
   encryption-level boundaries (GHSA-2mjx-qc3c-rqvc).

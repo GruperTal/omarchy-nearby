@@ -421,6 +421,34 @@ review of a popup on the real bar or an interactive file-chooser test. Those
 manual UI actions remain **Not run**. The official iPhone transfers above
 used the real helper separately from this QML harness.
 
+### 1.2.5 helper preparation, 2026-10-13
+
+The exact main merge commit
+`3ffca9342890d71c66f1e7346cd88feb6c2307f2` passed CI in run
+[38383631972](https://github.com/jfg96/omarchy-nearby/actions/runs/38383631972)
+before the `helper-v1.2.5` tag was created. The helper-release workflow
+[38384135757](https://github.com/jfg96/omarchy-nearby/actions/runs/38384135757)
+passed and published the Linux x86_64 helper as a prerelease.
+
+The downloaded executable independently matched its published checksum and
+GitHub asset digest: 9,132,128-byte size and SHA256
+`f07286bb96ad845fa755e3ebd4b468fc22b505a7a9bc7c22b95f7caf34f6c113`. `gh attestation verify`
+verified the expected repository, helper-release workflow, exact source commit
+and tag and refused self-hosted runners. Executing the verified published bytes
+with `--version` returned `omarchy-nearby-helper 1.2.5`.
+
+The initial plugin release preparation selected those values in
+`helper-release.env`; at that stage its backend tree matched the tagged helper
+source. This preparation is superseded by the rustls update below before
+stable publication.
+Both launcher/repair Bash suites passed. A fresh `--prefetch` through the
+tracked launcher downloaded the selected artifact into an isolated XDG cache,
+verified it and returned version `1.2.5`; the cached executable reported the
+same version. The
+official iPhone and Quickshell smoke results above remain the applicable manual
+records. Android, desktop and interactive popup/file-chooser validation remain
+**Not run**.
+
 ### Rustls handshake boundary security update, 2026-10-13
 
 GitHub's runtime dependency alert identified rustls 0.23.43 in the helper
@@ -447,6 +475,30 @@ the handshake boundary correction comes from the upstream rustls patch.
 Official iPhone round trips were tested with the preceding helper source as
 recorded above; that manual session has not yet been repeated with rustls
 0.23.45.
+
+### 1.2.6 helper preparation, 2026-10-13
+
+The rustls security fix was merged at
+`b187afc73d09cad50c7dfd309d7af80c47b7c963`. That exact main commit passed CI in
+[38386346462](https://github.com/jfg96/omarchy-nearby/actions/runs/38386346462)
+before creating `helper-v1.2.6`. Helper release workflow
+[38386808233](https://github.com/jfg96/omarchy-nearby/actions/runs/38386808233)
+passed and published the Linux x86_64 prerelease.
+
+The published executable was downloaded independently and verified: byte size
+9,141,056, SHA256 `3ba5ba44d3380b2d0e3ed6d1a42d6d1b8abb9c5acd11d0dd415a936e094a02ed`,
+matching the checksum file and GitHub asset digest. Attestation verification
+bound it to the expected repository, helper-release workflow, source commit
+and tag on a GitHub-hosted runner. The verified bytes reported
+`omarchy-nearby-helper 1.2.6`.
+
+The final plugin 1.2.6 preparation selects this corrected helper, with matching
+Cargo version, minimum helper floor and backend tree. All three Node suites and
+both distribution Bash suites passed with the final metadata. A fresh prefetch
+through the tracked launcher downloaded and verified the 1.2.6 artifact into an
+isolated XDG cache; both prefetch and the cached executable reported 1.2.6. GitHub marks the rustls
+dependency alert fixed on main. The previously published helper-v1.2.5 tag
+is retained and is superseded by this selection before plugin publication.
 
 ## Manual interoperability matrix
 
