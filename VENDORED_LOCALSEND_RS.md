@@ -512,6 +512,28 @@ are omitted and existing directory names merge. This deliberately refuses
 hidden files and paths beyond Nearby's limits even from official clients.
 Upstream status: not submitted or checked against a newer upstream revision.
 
+### 17. Require the fixed rustls handshake boundary checks
+
+- Files: `Cargo.toml` and `Cargo.lock`.
+- Advisory: [GHSA-2mjx-qc3c-rqvc](https://github.com/rustls/rustls/security/advisories/GHSA-2mjx-qc3c-rqvc).
+
+The standalone vendor lockfile used rustls 0.23.36 and the helper lockfile used
+0.23.43. Both are affected by rustls accepting TLS 1.3 handshake messages from
+the wrong encryption level when coalesced after a key-changing message. The
+upstream advisory states that the transcript remains authenticated; this is
+not a certificate/fingerprint verification bypass.
+
+The vendor and helper now require and lock rustls 0.23.45, which includes the
+upstream fix. Its dependency requirements also advance rustls-webpki to
+0.103.15 and, in the standalone vendor graph, aws-lc-rs to 1.18.0 and
+aws-lc-sys to 0.44.0, matching the helper's existing AWS-LC versions. There
+is no localsend-rs source refresh or change to Nearby's TLS trust policies.
+
+Validation uses the locked helper and vendor suites, including HTTPS
+transfers, client authentication and fingerprint rejection. Upstream status:
+fixed in rustls 0.23.45; this entry records the local dependency floor and
+lockfile update, not a locally implemented TLS patch.
+
 ## Nearby behavior outside the vendor
 
 The LocalSend 1.18 client-certificate compatibility hotfix is not one of the
