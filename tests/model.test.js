@@ -203,4 +203,16 @@ assert.deepEqual(Model.barEntry({version:1, plugins:[{id:"oma.nearby",receiverEn
 assert.equal(Model.barEntry({version:1, bar:{layout:{right:[null,"other.plugin",42]}}}, "oma.nearby"), null)
 assert.equal(Model.barEntry({version:1, plugins:["oma.nearby"]}, "oma.nearby"), null)
 
+// The preview decodes a peer's file inside the shell, so only the common
+// raster types are let through, and only by the type read from the bytes.
+for (const type of ["image/png", "image/jpeg", "image/webp", "image/gif"]) {
+  assert.equal(Model.previewableImage(type), true, `${type} must be previewable`)
+}
+for (const type of ["image/svg+xml", "image/x-xcf", "application/pdf", "text/plain", "IMAGE/PNG", "", null, undefined]) {
+  assert.equal(Model.previewableImage(type), false, `${type} must not reach an image decoder`)
+}
+assert.equal(Model.fileUrl("/home/someone/Downloads/photo.jpg"), "file:///home/someone/Downloads/photo.jpg")
+assert.equal(Model.fileUrl("/tmp/a b/é#?%.png"), "file:///tmp/a%20b/%C3%A9%23%3F%25.png",
+  "a received name must not be read as a URL query or fragment")
+
 console.log("Model tests passed")
