@@ -535,6 +535,23 @@ started again from its own `onExited` ran and reported the second file's type.
 Scenario 23 (a real transfer, the preview in the panel, the real clipboard and
 pasting into other applications) is **Not run**.
 
+### Download folder development validation, 2026-10-12
+
+The development checkout advances to plugin `1.2.7-dev`; the helper is
+unchanged and already resolves `XDG_DOWNLOAD_DIR` first. The Node suites
+passed.
+
+After review the panel offers **Use Downloads** and refuses the home folder.
+On Omarchy's shell with Quickshell 0.3.1, `downloadDir` was set by hand to a
+path that cannot be created: the helper reported "download destination
+unavailable" and the receiver gave up after its retries. Removing `downloadDir`
+from the entry, which is the write **Use Downloads** makes, started the
+receiver again within a second without touching the receiver switch, and the
+helper had no `XDG_DOWNLOAD_DIR` in its environment. Writing a folder back
+restarted it with that folder. Pressing **Use Downloads** in the panel, the
+refusal of the home folder on screen and the rest of scenario 24 (choosing a
+folder in the panel and receiving into it) are **Not run**.
+
 ## Manual interoperability matrix
 
 Run applicable transfer and PIN scenarios with both Android and iOS LocalSend
@@ -631,6 +648,14 @@ complete until those versions and results are written down.
     PDF: there must be no preview, and Copy must paste the file into a file
     manager. Send two pictures in one transfer: the result must stay plain.
     Receive a text file renamed to `.png`: there must be no preview.
+24. Choose **Save to**, cancel the chooser and confirm nothing changes. Choose a
+    folder: the receiver must restart once, the row must name the folder, and a
+    received file must land there. Restart the shell and confirm the folder is
+    still used. Set `downloadDir` to a path that cannot be created and confirm
+    the panel names it after the retries and still offers **Use Downloads**;
+    choose it and confirm the receiver starts, `downloadDir` is gone from the
+    entry and files go to Downloads again. Choose your home folder and confirm
+    it is refused with the reason.
 
 ## Result record
 
@@ -659,6 +684,7 @@ Copy this template for each validation session. Leave unexecuted cases marked
 | 21: unsafe settings and recovery | Isolated Omarchy installation | Not run | |
 | 22: folder transfers and lifecycle | Official Android / iOS / desktop client, separate rows | Not run | |
 | 23: received file preview and copy | Omarchy + peer | Not run | |
+| 24: folder for received files | Omarchy + peer | Not run | |
 
 For failures, identify the exact scenario and attach redacted logs or a
 reproduction. Split grouped rows whenever individual outcomes differ.

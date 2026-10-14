@@ -214,5 +214,30 @@ for (const type of ["image/svg+xml", "image/x-xcf", "application/pdf", "text/pla
 assert.equal(Model.fileUrl("/home/someone/Downloads/photo.jpg"), "file:///home/someone/Downloads/photo.jpg")
 assert.equal(Model.fileUrl("/tmp/a b/é#?%.png"), "file:///tmp/a%20b/%C3%A9%23%3F%25.png",
   "a received name must not be read as a URL query or fragment")
+// The folder for received files is read from the entry. Only an absolute path
+// is a choice: the helper ignores anything else, so showing it would name a
+// folder that is not used.
+assert.equal(Model.downloadDirIn({downloadDir: "/home/someone/Pictures/Phone"}), "/home/someone/Pictures/Phone")
+for (const value of ["", "Pictures", "~/Pictures", "./in", null, undefined, 42, ["/tmp"], {path: "/tmp"}]) {
+  assert.equal(Model.downloadDirIn({downloadDir: value}), "", `${JSON.stringify(value)} is not a folder choice`)
+}
+assert.equal(Model.downloadDirIn(null), "")
+assert.equal(Model.downloadDirIn({}), "")
+// The home folder and the folders above it are not a destination: a sender
+// names the files and folders, which would land among the user's own.
+for (const path of ["/home/someone", "/home/someone/", "/home", "/", "//home//someone", "/home/someone/Pictures/..", "/home/./someone"]) {
+  assert.equal(Model.containsHome(path, "/home/someone"), true, `${path} holds the home folder`)
+}
+for (const path of ["/home/someone/Downloads", "/home/someone/Pictures/Phone", "/home/someone2", "/home/other", "/data/in", "/run/media/someone/Stick"]) {
+  assert.equal(Model.containsHome(path, "/home/someone"), false, `${path} does not hold the home folder`)
+}
+assert.equal(Model.containsHome("/", ""), true, "without a known home folder the root is still refused")
+assert.equal(Model.containsHome("/data/in", ""), false)
+assert.equal(Model.folderName("/home/someone/Downloads"), "Downloads")
+assert.equal(Model.folderName("/home/someone/Downloads/"), "Downloads")
+assert.equal(Model.folderName("/"), "/")
+assert.equal(Model.folderName(""), "/")
+assert.equal(Model.folderName("/data/" + "x".repeat(40)), "x".repeat(23) + "…",
+  "a long folder name must be cut: the kit's buttons do not elide")
 
 console.log("Model tests passed")

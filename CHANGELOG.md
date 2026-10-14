@@ -6,6 +6,11 @@
   opening a file manager, and preview it when it is a PNG, JPEG, WebP or GIF
   picture. A picture is copied as a PNG image; any other file is copied as a
   file reference.
+- Choose the folder received files are saved to with **Save to** in the
+  panel. The choice is kept in Nearby's `shell.json` entry and applied by
+  restarting the receiver. **Use Downloads** removes it again, also when the
+  chosen folder has become unavailable and the receiver cannot start. The home
+  folder and the folders above it are refused.
 
 ## 1.2.6
 
