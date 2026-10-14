@@ -158,7 +158,7 @@ function extractFunction(name) {
 const functionNames = [
   "syncOpenState", "toggleReceiver", "startDiscovery", "forceFullDiscovery",
   "chooseDevice", "acceptIncoming", "declineIncoming", "finishText", "finishTerminal",
-  "cancelOutgoing", "cancelPin", "retryWithPin", "failWith", "noteTextCopied", "beginOutgoing",
+  "cancelOutgoing", "toggleTrusted", "cancelPin", "retryWithPin", "failWith", "noteTextCopied", "beginOutgoing",
   "openIncomingPinSettings", "beginIncomingPinEdit", "requestDisableIncomingPin",
   "cancelIncomingPinSettings", "submitIncomingPin", "confirmDisableIncomingPin",
   "clearSecretInputs",
@@ -183,6 +183,7 @@ function stubEngine() {
     finishText: record("finishText"),
     finishTerminal: record("finishTerminal"),
     cancelOutgoing: record("cancelOutgoing"),
+    toggleSelectedDeviceTrusted: record("toggleSelectedDeviceTrusted"),
     cancelPin: record("cancelPin"),
     retryWithPin: record("retryWithPin"),
     openIncomingPinSettings: record("openIncomingPinSettings"),
@@ -252,6 +253,9 @@ function panel(initial = {}) {
     ...initial,
   }
   context.engine = engine
+  // Derived from the selected device, like the bindings in Panel.qml.
+  Object.defineProperty(context, "targetCanTrust", {enumerable: true, get: () => Model.canTrust(context.selectedDevice)})
+  Object.defineProperty(context, "targetBackIndex", {enumerable: true, get: () => context.targetCanTrust ? 4 : 3})
   for (const name of ["useDownloadsIndex", "helperUpdateIndex", "helperCopyCommandIndex", "helperCopyLinkIndex"]) {
     const expression = intBindingExpression(name)
     Object.defineProperty(context, name, {
@@ -473,6 +477,36 @@ assert.match(source, /Button \{ visible:root\.useDownloadsIndex>=0;[^\n]*text:"U
   state.activateCursor()
   assert.equal(callNames(state).at(-1), "cancelOutgoing")
 }
+
+// A device with a certificate gets an auto-accept row between the send
+// actions and Back. One without keeps the four rows it had, so the keyboard
+// never lands on a control that is not drawn.
+{
+  const https = {fingerprint: "ab".repeat(32), alias: "Phone", protocol: "https"}
+  const state = panel({viewState: "target", selectedDevice: https, selectedIndex: 0})
+  state.moveCursor(0, 9)
+  assert.equal(state.selectedIndex, 4, "Back is the fifth stop for a device that can be trusted")
+  state.activateCursor()
+  assert.equal(state.closes.length + callNames(state).filter(name => name === "clearTarget").length, 1,
+    "the last row must still be Back")
+  state.selectedIndex = 3
+  state.activateCursor()
+  assert.equal(callNames(state).at(-1), "toggleSelectedDeviceTrusted")
+
+  const plain = panel({viewState: "target", selectedDevice: {fingerprint: "random-id", alias: "Old phone", protocol: "http"}, selectedIndex: 0})
+  plain.moveCursor(0, 9)
+  assert.equal(plain.selectedIndex, 3, "a device that cannot be trusted keeps Back as the fourth stop")
+  plain.activateCursor()
+  assert.equal(callNames(plain).includes("toggleSelectedDeviceTrusted"), false,
+    "the hidden auto-accept row must not be reachable from the keyboard")
+  assert.equal(callNames(plain).at(-1), "clearTarget")
+}
+assert.match(source, /Button \{ visible:root\.targetCanTrust;[^\n]*text:"Auto-accept · "\+\(root\.selectedDeviceTrusted\?"On":"Off"\)[^\n]*root\.selectedIndex===3[^\n]*root\.noteHover\(v,3\)[^\n]*onClicked:root\.toggleTrusted\(\)/,
+  "the auto-accept row is offered only for a device with a certificate and states what it is set to")
+assert.match(source, /text:"Back";[^\n]*root\.selectedIndex===root\.targetBackIndex[^\n]*root\.noteHover\(v,root\.targetBackIndex\)/,
+  "Back must follow the auto-accept row in keyboard and hover order")
+assert.match(source, /readonly property int targetBackIndex: targetCanTrust \? 4 : 3/,
+  "Back moves down one row exactly when the auto-accept row is drawn")
 
 {
   const state = panel({viewState: "success"})

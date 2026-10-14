@@ -179,6 +179,14 @@ enum Command {
         pin: String,
     },
     DisableIncomingPin,
+    TrustDevice {
+        fingerprint: String,
+        #[serde(default)]
+        alias: String,
+    },
+    UntrustDevice {
+        fingerprint: String,
+    },
     Shutdown,
 }
 
@@ -1161,6 +1169,81 @@ async fn update_incoming_pin(
     Ok(())
 }
 
+fn trusted_fingerprints(receiver_settings: &settings::Settings) -> HashSet<String> {
+    receiver_settings
+        .trusted_devices
+        .iter()
+        .map(|device| device.fingerprint.clone())
+        .collect()
+}
+
+fn trusted_devices_event(receiver_settings: &settings::Settings) -> Value {
+    let devices: Vec<Value> = receiver_settings
+        .trusted_devices
+        .iter()
+        .map(|device| json!({"fingerprint":device.fingerprint,"alias":device.alias}))
+        .collect();
+    json!({"event":"trusted_devices","devices":devices})
+}
+
+/// A peer's alias as the label of a trusted device: one line, bounded.
+fn trusted_alias(alias: &str) -> String {
+    alias
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(128)
+        .collect()
+}
+
+/// Persist a new trust list, then let the receiver act on it. Saving first
+/// means no device is trusted in memory by a list that failed to persist.
+fn update_trusted_devices(
+    settings_path: &Path,
+    current: &mut settings::Settings,
+    trusted: &Mutex<HashSet<String>>,
+    next: Result<settings::Settings>,
+) -> Value {
+    match next.and_then(|next| settings::save(settings_path, &next).map(|()| next)) {
+        Ok(next) => {
+            *trusted.lock().unwrap() = trusted_fingerprints(&next);
+            *current = next;
+            trusted_devices_event(current)
+        }
+        Err(_) => json!({"event":"error","message":"Unable to update trusted devices"}),
+    }
+}
+
+/// Turn an incoming request into the event the frontend is told about.
+///
+/// A request is accepted without asking only when the certificate its sender
+/// proved in the TLS handshake is one the user trusted. The fingerprint a
+/// sender declares is never consulted: it is announced on the network, so any
+/// peer can repeat it. Every other request waits for the user's decision.
+fn receive_request(
+    request: PendingRequest,
+    trusted: &Mutex<HashSet<String>>,
+    pending: &Mutex<HashMap<String, PendingRequest>>,
+) -> Option<Value> {
+    let id = request.request_id().to_string();
+    let sender = valid_remote_text(&request.sender().alias, 128);
+    let mut files: Vec<Value> = request.files().values().map(|f| json!({"id":f.id,"name":valid_remote_text(&f.file_name,255),"size":f.size,"type":valid_remote_text(&f.file_type,128),"preview":f.preview.as_deref().map(|v|valid_remote_text(v,4096))})).collect();
+    files.sort_by_key(|f| f["name"].as_str().unwrap_or("").to_owned());
+    let total = request.files().values().map(|f| f.size).sum::<u64>();
+    let sender_is_trusted = request
+        .sender_certificate_fingerprint()
+        .is_some_and(|fingerprint| trusted.lock().unwrap().contains(fingerprint));
+    if sender_is_trusted {
+        // A sender that has already given up leaves nothing to announce.
+        return request.accept().then(|| {
+            json!({"event":"incoming_auto_accepted","requestId":id,"sender":sender,"files":files,"total":total})
+        });
+    }
+    pending.lock().unwrap().insert(id.clone(), request);
+    Some(
+        json!({"event":"incoming_request","requestId":id,"sender":sender,"files":files,"total":total}),
+    )
+}
+
 fn configure_receiver_pin(
     builder: LocalSendServerBuilder,
     receiver_settings: &settings::Settings,
@@ -1251,6 +1334,9 @@ async fn main() -> Result<()> {
         json!({"event":"ready","helperVersion":env!("CARGO_PKG_VERSION"),"alias":identity.alias,"directory":canonical_download,"port":server.port(),"fingerprint":identity.fingerprint}),
     );
     emit(json!({"event":"incoming_pin_state","enabled":receiver_settings.incoming_pin.is_some()}));
+    emit(trusted_devices_event(&receiver_settings));
+    let trusted = Arc::new(Mutex::new(trusted_fingerprints(&receiver_settings)));
+    let trusted_events = trusted.clone();
     let pending = Arc::new(Mutex::new(HashMap::<String, PendingRequest>::new()));
     let pending_events = pending.clone();
     let peer_events = peer_tx.clone();
@@ -1261,15 +1347,10 @@ async fn main() -> Result<()> {
                     let _ = peer_events.send(device);
                 }
                 ServerEvent::TransferRequest(request) => {
-                    let id = request.request_id().to_string();
-                    let sender = valid_remote_text(&request.sender().alias, 128);
-                    let mut files: Vec<Value> = request.files().values().map(|f| json!({"id":f.id,"name":valid_remote_text(&f.file_name,255),"size":f.size,"type":valid_remote_text(&f.file_type,128),"preview":f.preview.as_deref().map(|v|valid_remote_text(v,4096))})).collect();
-                    files.sort_by_key(|f| f["name"].as_str().unwrap_or("").to_owned());
-                    let total = request.files().values().map(|f| f.size).sum::<u64>();
-                    pending_events.lock().unwrap().insert(id.clone(), request);
-                    emit(
-                        json!({"event":"incoming_request","requestId":id,"sender":sender,"files":files,"total":total}),
-                    );
+                    if let Some(event) = receive_request(request, &trusted_events, &pending_events)
+                    {
+                        emit(event);
+                    }
                 }
                 ServerEvent::TransferRequestExpired { request_id } => {
                     pending_events.lock().unwrap().remove(&request_id);
@@ -1401,6 +1482,14 @@ async fn main() -> Result<()> {
                             Ok(())=>emit(json!({"event":"incoming_pin_state","enabled":false})),
                             Err(_)=>emit(json!({"event":"incoming_pin_update_failed","message":"Unable to update incoming PIN"})),
                         }
+                    },
+                    Command::TrustDevice { fingerprint, alias } => {
+                        let next = settings::with_trusted_device(&receiver_settings, &fingerprint, &trusted_alias(&alias));
+                        emit(update_trusted_devices(&settings_path, &mut receiver_settings, &trusted, next));
+                    },
+                    Command::UntrustDevice { fingerprint } => {
+                        let next = Ok(settings::without_trusted_device(&receiver_settings, &fingerprint));
+                        emit(update_trusted_devices(&settings_path, &mut receiver_settings, &trusted, next));
                     },
                     Command::Shutdown => break,
                 }
@@ -2107,6 +2196,196 @@ mod tests {
             serde_json::from_str::<Command>(r#"{"command":"disable_incoming_pin"}"#).unwrap(),
             Command::DisableIncomingPin
         ));
+    }
+
+    #[test]
+    fn trust_commands_name_a_device_by_fingerprint() {
+        let fingerprint = "ab".repeat(32);
+        assert!(matches!(
+            serde_json::from_str::<Command>(&format!(
+                r#"{{"command":"trust_device","fingerprint":"{fingerprint}","alias":"Phone"}}"#
+            ))
+            .unwrap(),
+            Command::TrustDevice { fingerprint: parsed, alias } if parsed == fingerprint && alias == "Phone"
+        ));
+        assert!(matches!(
+            serde_json::from_str::<Command>(&format!(
+                r#"{{"command":"untrust_device","fingerprint":"{fingerprint}"}}"#
+            ))
+            .unwrap(),
+            Command::UntrustDevice { fingerprint: parsed } if parsed == fingerprint
+        ));
+        assert!(serde_json::from_str::<Command>(r#"{"command":"trust_device"}"#).is_err());
+        assert_eq!(trusted_alias("Pho\nne\t\u{7}"), "Phone");
+        assert_eq!(trusted_alias(&"x".repeat(300)).len(), 128);
+    }
+
+    #[test]
+    fn trust_list_updates_persist_before_the_receiver_acts_on_them() {
+        let directory = std::env::temp_dir().join(format!(
+            "omarchy-nearby-trust-test-{}-{}",
+            std::process::id(),
+            FileId::new().as_str()
+        ));
+        let settings_path = directory.join("state/settings.json");
+        let fingerprint = "ab".repeat(32);
+        let mut current = settings::Settings::default();
+        let trusted = Mutex::new(HashSet::new());
+
+        let next = settings::with_trusted_device(&current, &fingerprint.to_uppercase(), "Phone");
+        let event = update_trusted_devices(&settings_path, &mut current, &trusted, next);
+        assert_eq!(
+            event,
+            json!({"event":"trusted_devices","devices":[{"fingerprint":fingerprint,"alias":"Phone"}]})
+        );
+        assert!(trusted.lock().unwrap().contains(&fingerprint));
+        assert_eq!(settings::load(&settings_path).unwrap(), current);
+
+        // A list that cannot be saved must not be acted on: the device the
+        // user just removed would otherwise come back after a restart.
+        let rejected = settings::with_trusted_device(&current, "not-a-fingerprint", "Other");
+        let event = update_trusted_devices(&settings_path, &mut current, &trusted, rejected);
+        assert_eq!(event["event"], "error");
+        assert_eq!(trusted.lock().unwrap().len(), 1);
+        std::fs::remove_dir_all(directory.join("state")).unwrap();
+        std::fs::write(directory.join("state"), b"not a directory").unwrap();
+        let removal = Ok(settings::without_trusted_device(&current, &fingerprint));
+        let event = update_trusted_devices(&settings_path, &mut current, &trusted, removal);
+        assert_eq!(event["event"], "error");
+        assert!(
+            trusted.lock().unwrap().contains(&fingerprint),
+            "a removal that did not persist must not be reported as done"
+        );
+        assert_eq!(current.trusted_devices.len(), 1);
+
+        std::fs::remove_file(directory.join("state")).unwrap();
+        let removal = Ok(settings::without_trusted_device(&current, &fingerprint));
+        let event = update_trusted_devices(&settings_path, &mut current, &trusted, removal);
+        assert_eq!(event, json!({"event":"trusted_devices","devices":[]}));
+        assert!(trusted.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Offer one small file to `target` and hand the receiver's next request
+    /// to `receive_request`, returning its event and whether the offer was
+    /// accepted without anyone answering it.
+    async fn offered_request(
+        client: LocalSendClient,
+        target: DeviceInfo,
+        events: &mut mpsc::UnboundedReceiver<ServerEvent>,
+        trusted: &Mutex<HashSet<String>>,
+    ) -> (Value, bool) {
+        let id = FileId::new();
+        let files = HashMap::from([(
+            id.clone(),
+            FileMetadata {
+                id,
+                file_name: "photo.jpg".into(),
+                size: 4,
+                file_type: "image/jpeg".into(),
+                sha256: None,
+                preview: None,
+                metadata: None,
+            },
+        )]);
+        let sending =
+            tokio::spawn(async move { client.prepare_upload(&target, files, None).await });
+        let request = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(ServerEvent::TransferRequest(request)) = events.recv().await {
+                    break request;
+                }
+            }
+        })
+        .await
+        .expect("the request must reach the helper");
+        let pending = Mutex::new(HashMap::new());
+        let event = receive_request(request, trusted, &pending).expect("an event");
+        // Whatever was parked for the user is declined, so the sender returns.
+        for (_, parked) in pending.lock().unwrap().drain() {
+            parked.decline();
+        }
+        (event, sending.await.unwrap().is_ok())
+    }
+
+    #[tokio::test]
+    async fn only_a_proved_trusted_certificate_is_accepted_without_asking() {
+        let directory = std::env::temp_dir().join(format!(
+            "omarchy-nearby-auto-accept-test-{}-{}",
+            std::process::id(),
+            FileId::new().as_str()
+        ));
+        tokio::fs::create_dir_all(&directory).await.unwrap();
+        let phone = generate_tls_certificate().unwrap();
+        let stranger = generate_tls_certificate().unwrap();
+        let trusting = HashSet::from([phone.fingerprint.clone()]);
+
+        // Every sender below declares the phone's fingerprint, which is
+        // announced on the network. Only the certificate it proves differs.
+        for (case, trusted, certificate, auto_accepted) in [
+            ("the trusted device", trusting.clone(), Some(&phone), true),
+            (
+                "another device repeating the trusted fingerprint",
+                trusting.clone(),
+                Some(&stranger),
+                false,
+            ),
+            (
+                "the trusted fingerprint with no certificate",
+                trusting.clone(),
+                None,
+                false,
+            ),
+            (
+                "a device that is no longer trusted",
+                HashSet::new(),
+                Some(&phone),
+                false,
+            ),
+        ] {
+            // A fresh receiver per case: an accepted offer holds the single
+            // upload session until it is used or times out.
+            let (mut server, mut events) = LocalSendServer::builder()
+                .alias("Receiver")
+                .port(0)
+                .save_dir(&directory)
+                .protocol(Protocol::Https)
+                .tls_certificate(generate_tls_certificate().unwrap())
+                .auto_accept(false)
+                .build()
+                .await
+                .unwrap();
+            let mut target = DeviceInfo::new("Receiver".into(), server.port(), Protocol::Https);
+            target.ip = Some("127.0.0.1".into());
+            target.fingerprint = server.device().fingerprint.clone();
+            let mut device = DeviceInfo::new("Phone".into(), 53317, Protocol::Https);
+            device.fingerprint = phone.fingerprint.clone();
+            let policy = TlsTrustPolicy::new([target.fingerprint.clone()]);
+            let client = match certificate {
+                Some(certificate) => {
+                    LocalSendClient::with_trust_policy_and_identity(device, policy, certificate)
+                }
+                None => LocalSendClient::with_trust_policy(device, policy),
+            }
+            .unwrap();
+
+            let (event, accepted) =
+                offered_request(client, target, &mut events, &Mutex::new(trusted)).await;
+            let expected = if auto_accepted {
+                "incoming_auto_accepted"
+            } else {
+                "incoming_request"
+            };
+            assert_eq!(event["event"], expected, "{case}");
+            assert_eq!(event["sender"], "Phone", "{case}");
+            assert_eq!(event["files"][0]["name"], "photo.jpg", "{case}");
+            assert_eq!(
+                accepted, auto_accepted,
+                "{case}: accepted without an answer"
+            );
+            server.stop();
+        }
+        tokio::fs::remove_dir_all(directory).await.unwrap();
     }
 
     #[tokio::test]

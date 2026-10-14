@@ -93,6 +93,32 @@ function currentIncoming(queue) {
   return queue && queue.length ? queue[0] : null
 }
 
+// The devices whose transfers the helper accepts without asking, as it
+// reports them. Fingerprints are compared in lowercase, the form the helper
+// stores them in.
+function trustedDevices(list) {
+  var next = []
+  for (var i = 0; i < (list || []).length; i++) {
+    var device = list[i]
+    if (!device || typeof device.fingerprint !== "string" || device.fingerprint === "") continue
+    next.push({fingerprint: device.fingerprint.toLowerCase(), alias: String(device.alias || "")})
+  }
+  return next
+}
+
+function isTrusted(trusted, device) {
+  var fingerprint = device ? String(device.fingerprint || "").toLowerCase() : ""
+  if (fingerprint === "") return false
+  for (var i = 0; i < (trusted || []).length; i++) if (trusted[i].fingerprint === fingerprint) return true
+  return false
+}
+
+// A device can be trusted only by a certificate: its fingerprint has to be the
+// SHA-256 of one, and it has to be reachable over HTTPS, where it presents it.
+function canTrust(device) {
+  return !!device && device.protocol === "https" && /^[0-9a-fA-F]{64}$/.test(String(device.fingerprint || ""))
+}
+
 function outgoingCommand(pending, transferId, pin) {
   if (!pending || !pending.device || (pending.kind !== "files" && pending.kind !== "text")) return null
   var command = {command:pending.kind === "files" ? "send_files" : "send_text", transfer_id:transferId, device:pending.device}
@@ -315,4 +341,4 @@ function manifestMinHelperVersion(text, pluginId) {
   }
 }
 
-if (typeof module !== "undefined") module.exports = { parseLine, upsertDevice, snapshotDevices, iconFor, formatBytes, incomingSummary, notificationText, previewableImage, fileUrl, enqueueIncoming, removeIncoming, currentIncoming, outgoingCommand, viewAfterOutgoing, parseShellConfig, barEntry, hasStringBarEntry, promoteStringBarEntry, receiverEnabledIn, downloadDirIn, containsHome, folderName, helperVersionMatches, compareVersions, helperSatisfies, manifestVersion, manifestMinHelperVersion, MAX_DEVICES }
+if (typeof module !== "undefined") module.exports = { parseLine, upsertDevice, snapshotDevices, iconFor, formatBytes, incomingSummary, notificationText, previewableImage, fileUrl, enqueueIncoming, removeIncoming, currentIncoming, trustedDevices, isTrusted, canTrust, outgoingCommand, viewAfterOutgoing, parseShellConfig, barEntry, hasStringBarEntry, promoteStringBarEntry, receiverEnabledIn, downloadDirIn, containsHome, folderName, helperVersionMatches, compareVersions, helperSatisfies, manifestVersion, manifestMinHelperVersion, MAX_DEVICES }

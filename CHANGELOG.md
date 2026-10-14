@@ -11,6 +11,10 @@
   restarting the receiver. **Use Downloads** removes it again, also when the
   chosen folder has become unavailable and the receiver cannot start. The home
   folder and the folders above it are refused.
+- Accept transfers from devices you trust without asking. **Auto-accept** in a
+  device's entry trusts it by the TLS certificate it proves when it connects;
+  a device that only repeats a trusted fingerprint is still asked about. The
+  receiver now requests, without requiring, a client certificate from senders.
 
 ## 1.2.6
 

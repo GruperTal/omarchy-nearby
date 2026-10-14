@@ -239,5 +239,26 @@ assert.equal(Model.folderName("/"), "/")
 assert.equal(Model.folderName(""), "/")
 assert.equal(Model.folderName("/data/" + "x".repeat(40)), "x".repeat(23) + "…",
   "a long folder name must be cut: the kit's buttons do not elide")
+// Trust is keyed by certificate fingerprint and compared in lowercase, the
+// form the helper stores. Only a device with a certificate can be trusted.
+{
+  const fingerprint = "ab".repeat(32)
+  const trusted = Model.trustedDevices([{fingerprint: fingerprint.toUpperCase(), alias: "Phone"}, null, {alias: "no fingerprint"}, {fingerprint: 42}])
+  assert.deepEqual(trusted, [{fingerprint, alias: "Phone"}])
+  assert.deepEqual(Model.trustedDevices(null), [])
+  assert.equal(Model.isTrusted(trusted, {fingerprint}), true)
+  assert.equal(Model.isTrusted(trusted, {fingerprint: fingerprint.toUpperCase()}), true)
+  assert.equal(Model.isTrusted(trusted, {fingerprint: "cd".repeat(32)}), false)
+  assert.equal(Model.isTrusted(trusted, {fingerprint: ""}), false)
+  assert.equal(Model.isTrusted(trusted, null), false)
+  assert.equal(Model.isTrusted([{fingerprint: "", alias: "empty"}], {fingerprint: ""}), false,
+    "a device with no fingerprint must never match an entry")
+
+  assert.equal(Model.canTrust({protocol: "https", fingerprint}), true)
+  assert.equal(Model.canTrust({protocol: "http", fingerprint}), false,
+    "a plain HTTP device presents no certificate to be trusted by")
+  assert.equal(Model.canTrust({protocol: "https", fingerprint: "random-http-style-id"}), false)
+  assert.equal(Model.canTrust(null), false)
+}
 
 console.log("Model tests passed")

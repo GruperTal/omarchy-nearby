@@ -552,6 +552,23 @@ restarted it with that folder. Pressing **Use Downloads** in the panel, the
 refusal of the home folder on screen and the rest of scenario 24 (choosing a
 folder in the panel and receiving into it) are **Not run**.
 
+### Trusted device auto-accept development validation, 2026-10-12
+
+The development checkout advances to plugin `1.2.7-dev` and helper/floor
+`1.2.7`. `helper-release.env` still pins the verified 1.2.6 artifact; it must
+only change after publishing and independently verifying a matching 1.2.7
+helper. Until then this checkout requires a deliberately built local helper to
+meet its new compatibility floor.
+
+The helper, vendor and Node suites passed. They cover a sender identified by
+the certificate it proves, a sender repeating a trusted fingerprint with
+another certificate or with none, plain HTTP, a certificate presented without
+its key, trust list validation and persistence before use, and the shell's
+handling of a transfer accepted without asking. All of that is Nearby talking
+to its own vendored client. Whether a given official LocalSend release presents
+the certificate behind its announced fingerprint has not been checked:
+scenario 25 is **Not run**.
+
 ## Manual interoperability matrix
 
 Run applicable transfer and PIN scenarios with both Android and iOS LocalSend
@@ -656,6 +673,16 @@ complete until those versions and results are written down.
     choose it and confirm the receiver starts, `downloadDir` is gone from the
     entry and files go to Downloads again. Choose your home folder and confirm
     it is refused with the reason.
+25. With official LocalSend on Android and on iOS, select the phone in Nearby
+    and turn Auto-accept on. Send a file and then text from the phone: neither
+    may prompt, the file must be saved and announced once, and the helper log
+    must not show a request waiting for approval. Record the app versions. If a
+    version still prompts, record that it presents no usable client
+    certificate. Turn Auto-accept off and confirm the prompt returns. From a
+    second device, announce the phone's fingerprint and send: Nearby must
+    prompt. Enable an incoming PIN and confirm the trusted phone still has to
+    supply it. Run `omarchy-shell oma.nearby forgetTrusted` and confirm the
+    phone is asked about again.
 
 ## Result record
 
@@ -685,6 +712,7 @@ Copy this template for each validation session. Leave unexecuted cases marked
 | 22: folder transfers and lifecycle | Official Android / iOS / desktop client, separate rows | Not run | |
 | 23: received file preview and copy | Omarchy + peer | Not run | |
 | 24: folder for received files | Omarchy + peer | Not run | |
+| 25: trusted device auto-accept | Android / iOS, separate rows when run | Not run | |
 
 For failures, identify the exact scenario and attach redacted logs or a
 reproduction. Split grouped rows whenever individual outcomes differ.

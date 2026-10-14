@@ -534,6 +534,43 @@ transfers, client authentication and fingerprint rejection. Upstream status:
 fixed in rustls 0.23.45; this entry records the local dependency floor and
 lockfile update, not a locally implemented TLS patch.
 
+### 18. Request the sender's client certificate and report its fingerprint
+
+- Nearby change: `feat: accept transfers from trusted devices without asking`.
+- Files: `src/server/client_identity.rs` (new), `src/server/server.rs`,
+  `src/server/handlers.rs`, `src/server/events.rs`, `src/server/mod.rs` and
+  `tests/conformance_client_identity.rs` (new).
+- Public API: `PendingRequest::sender_certificate_fingerprint`.
+
+The HTTPS receiver did not ask for a client certificate, so everything a
+consumer knew about a sender came from the request body. The `fingerprint`
+there is the sender's own claim, and a fingerprint is announced on the network,
+so any peer can repeat another device's. A consumer could not make any decision
+that depends on who is sending.
+
+The receiver now builds its `rustls::ServerConfig` itself, with the same
+certificate, protocol versions and HTTP/1.1-only ALPN as before, and a client
+certificate verifier that requests a certificate without requiring one. It
+admits any certificate, because peers are self-signed, and delegates the
+handshake signature check to rustls, so a peer has to hold the private key of
+the certificate it presents. An acceptor wrapped around the existing TLS and
+connection-limit acceptors computes the SHA-256 of that certificate and
+attaches it to the connection's requests; `prepare-upload` copies it onto the
+`PendingRequest`. Nothing else reads it. The vendor makes no trust decision:
+the default answer to a request is unchanged, and Nearby's helper decides what
+a proved fingerprint is worth.
+
+A sender that presents no certificate is served exactly as before and reports
+`None`, as does every request over plain HTTP. A handshake signed with a key
+other than the presented certificate's fails before any request is read.
+
+Regression coverage: a sender identified by its certificate; a sender that
+declares another device's fingerprint while presenting its own certificate; a
+sender without a certificate; plain HTTP; and a certificate presented with a
+different key, which is refused while the same certificate with its own key is
+served. The last test fails if the verifier stops checking the handshake
+signature. Upstream status: not submitted.
+
 ## Nearby behavior outside the vendor
 
 The LocalSend 1.18 client-certificate compatibility hotfix is not one of the

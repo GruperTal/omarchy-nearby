@@ -68,7 +68,8 @@ While the receiver is off, normal startup does not download the helper.
 4. Enter the destination's PIN if requested, and approve the transfer there.
 
 For incoming transfers, leave Nearby on and use **Accept** or **Decline** when a
-request arrives. Files go to your configured Downloads directory, or to the
+request arrives. For a device of your own, **Auto-accept** in its entry skips
+that prompt. Files go to your configured Downloads directory, or to the
 folder chosen with **Save to** in the panel. A single received file can be
 copied from the panel, with a preview when it is a picture, and so can
 received text.
